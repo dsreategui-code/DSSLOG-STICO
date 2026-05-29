@@ -19,7 +19,9 @@ def render():
     render_view_title(
         "Alertas",
         "Revisa las replanificaciones intravehiculo sugeridas durante la jornada. "
-        "Solo reordenan pedidos pendientes del mismo vehiculo, sin reasignar entre flotas."
+        "Solo aparecen aqui las propuestas que mejoran el OTD (o mantienen el OTD "
+        "y reducen el tiempo total). Las que no mejoran se descartan y quedan "
+        "en la bitacora de eventos."
     )
     render_step_breadcrumb()
 

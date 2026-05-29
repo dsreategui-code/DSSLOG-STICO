@@ -1,4 +1,10 @@
-"""Validacion - Configuracion del experimento."""
+"""Validacion - Configuracion del experimento.
+
+Solo se exponen los parametros que el usuario realmente decide: iteraciones,
+escenarios, semilla y umbral de riesgo. El motor de optimizacion es OR-Tools
+(con fallback tecnico interno) y la replanificacion intravehiculo del escenario
+DSS completo se aplica automaticamente cuando mejora el OTD.
+"""
 import streamlit as st
 
 from components.layout import render_view_title, render_divider, render_footer
@@ -11,11 +17,17 @@ from utils.constants import (
 from config.settings import RANDOM_SEED
 
 
+# Valores internos fijos (no expuestos en la UI)
+_VELOCIDAD_KMH_FIJA = 18.0
+_MOTOR_OPTIMIZACION = "auto"   # OR-Tools con respaldo greedy interno
+
+
 def render():
     render_view_title(
         "Configuracion del experimento",
         "Define los parametros operativos del experimento de validacion. La replanificacion "
-        "intravehiculo solo aplica al escenario DSS completo."
+        "intravehiculo se aplica automaticamente en el escenario DSS completo cuando mejora "
+        "el OTD proyectado."
     )
     render_step_breadcrumb()
 
@@ -26,14 +38,13 @@ def render():
         iteraciones = st.number_input(
             "Iteraciones Monte Carlo", min_value=5, max_value=200,
             value=int(cfg_prev.get("iteraciones", 30)), step=5,
-        )
-        velocidad = st.slider(
-            "Velocidad urbana promedio (km/h)", 10.0, 35.0,
-            float(cfg_prev.get("velocidad_kmh", 18.0)), 0.5,
+            help="Numero de corridas independientes por escenario.",
         )
         umbral = st.slider(
             "Umbral de riesgo para replanificar (min acumulados)", 5, 60,
             int(cfg_prev.get("umbral_riesgo_min", 15)), 1,
+            help="Cuando el retraso proyectado de los pedidos pendientes excede este "
+                 "umbral, el motor evalua una replanificacion intravehiculo.",
         )
     with col_r:
         semilla = st.number_input(
@@ -46,17 +57,17 @@ def render():
             default=cfg_prev.get("escenarios_activos",
                                  ["sin_dss", "solo_ruta", "dss_completo"]),
             format_func=lambda x: {
-                "sin_dss": "Sin DSS",
-                "solo_ruta": "Ruta optimizada",
+                "sin_dss": "Operacion sin DSS",
+                "solo_ruta": "DSS parcial",
                 "dss_completo": "DSS completo",
             }.get(x, x),
         )
-        st.write("")
-        aprob_auto = st.toggle(
-            "Aprobar replanificaciones automaticamente (modo validacion)",
-            value=bool(cfg_prev.get("aprobacion_automatica", True)),
-            help="En validacion la replanificacion intravehiculo se aplica sola si mejora el OTD.",
-        )
+
+    st.caption(
+        "Motor de optimizacion: OR-Tools (CVRPTW). "
+        "La replanificacion intravehiculo del escenario DSS completo se aplica "
+        "automaticamente cuando mejora el OTD."
+    )
 
     render_divider()
 
@@ -73,17 +84,19 @@ def render():
             cfg = {
                 "modo": "validacion",
                 "iteraciones": int(iteraciones),
-                "velocidad_kmh": float(velocidad),
                 "umbral_riesgo_min": int(umbral),
                 "semilla": int(semilla),
                 "escenarios_activos": escenarios,
-                "aprobacion_automatica": bool(aprob_auto),
+                # Parametros internos no expuestos
+                "velocidad_kmh": _VELOCIDAD_KMH_FIJA,
+                "motor_optimizacion": _MOTOR_OPTIMIZACION,
+                "aprobacion_automatica": True,
                 "jornada_inicio": "09:00",
                 "jornada_fin": "19:00",
             }
             st.session_state.configuracion = cfg
             log_bitacora("Validacion - configuracion definida",
-                         f"{len(escenarios)} escenarios · {iteraciones} iteraciones")
+                         f"{len(escenarios)} escenarios - {iteraciones} iteraciones")
             navigate_to(VISTA_VALIDATION_SIMULATION)
 
     render_footer()

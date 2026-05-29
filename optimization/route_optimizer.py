@@ -78,16 +78,27 @@ def _calcular_metricas_ruta(ruta_pedidos: pd.DataFrame, base_lat: float,
     return dist_total, tiempo_min
 
 
-def asignar_pedidos(pedidos: pd.DataFrame, vehiculos: pd.DataFrame) -> Dict[str, List[str]]:
-    """Asigna cada pedido a un vehiculo respetando capacidad y preferencia de zona.
+def asignar_pedidos(pedidos: pd.DataFrame, vehiculos: pd.DataFrame,
+                    factor_balance: float = 1.0) -> Dict[str, List[str]]:
+    """Asigna cada pedido a un vehiculo respetando capacidad, zona y balance.
+
+    El cupo efectivo de cada vehiculo se acota a ceil(N/V * factor_balance) para
+    distribuir los pedidos entre toda la flota antes de saturar a unos pocos.
+    Si la zona preferente esta saturada se busca el vehiculo con menos carga.
 
     Devuelve un dict {vehiculo_id: [pedido_id, ...]} (sin orden todavia).
     """
+    n_pedidos = len(pedidos)
+    num_v = len(vehiculos)
+    cupo_balance = max(1, math.ceil(n_pedidos / max(num_v, 1) * factor_balance))
+
     asignacion: Dict[str, List[str]] = {v: [] for v in vehiculos["vehiculo_id"]}
     cargas_u = {v: 0 for v in vehiculos["vehiculo_id"]}
     cargas_kg = {v: 0.0 for v in vehiculos["vehiculo_id"]}
-    cap_u = dict(zip(vehiculos["vehiculo_id"], vehiculos["capacidad_unidades"]))
+    cap_u_real = dict(zip(vehiculos["vehiculo_id"], vehiculos["capacidad_unidades"]))
     cap_kg = dict(zip(vehiculos["vehiculo_id"], vehiculos["capacidad_kg"]))
+    # Cupo efectivo: minimo entre capacidad fisica y cupo de balance
+    cap_u = {v: min(int(cap_u_real[v]), cupo_balance) for v in cap_u_real}
     veh_por_zona = vehiculos.groupby("zona_preferente")["vehiculo_id"].apply(list).to_dict()
 
     pedidos_ord = pedidos.sort_values(
@@ -98,24 +109,31 @@ def asignar_pedidos(pedidos: pd.DataFrame, vehiculos: pd.DataFrame) -> Dict[str,
         zona = p["zona"]
         candidatos = veh_por_zona.get(zona, list(vehiculos["vehiculo_id"]))
 
-        # Filtrar por capacidad disponible
+        # 1) Vehiculos de la zona con cupo de balance disponible
         viables = [
             v for v in candidatos
             if cargas_u[v] + 1 <= cap_u[v] and cargas_kg[v] + p["peso_kg"] <= cap_kg[v]
         ]
+        # 2) Cualquier vehiculo con cupo de balance disponible
         if not viables:
-            # Si ningun vehiculo de la zona tiene espacio, usar cualquiera viable
             viables = [
                 v for v in vehiculos["vehiculo_id"]
                 if cargas_u[v] + 1 <= cap_u[v] and cargas_kg[v] + p["peso_kg"] <= cap_kg[v]
             ]
+        # 3) Relajar cupo de balance: cualquier vehiculo con capacidad fisica disponible
         if not viables:
-            # Como ultimo recurso, asignar al que menos carga tenga (puede saturar)
+            viables = [
+                v for v in vehiculos["vehiculo_id"]
+                if cargas_u[v] + 1 <= cap_u_real[v]
+                and cargas_kg[v] + p["peso_kg"] <= cap_kg[v]
+            ]
+        # 4) Ultimo recurso: el de menor carga
+        if not viables:
             viables = sorted(vehiculos["vehiculo_id"].tolist(),
                              key=lambda v: cargas_u[v])
 
         # Elegir el de menor carga relativa
-        elegido = min(viables, key=lambda v: cargas_u[v] / max(cap_u[v], 1))
+        elegido = min(viables, key=lambda v: cargas_u[v] / max(cap_u_real[v], 1))
         asignacion[elegido].append(p["pedido_id"])
         cargas_u[elegido] += 1
         cargas_kg[elegido] += float(p["peso_kg"])

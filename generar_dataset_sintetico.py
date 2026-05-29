@@ -82,12 +82,13 @@ PERFILES_TRAFICO = [
 ]
 
 PROB_INCIDENCIAS = [
-    ("trafico_severo",          0.08),
-    ("estacionamiento_dificil", 0.12),
-    ("acceso_restringido",      0.05),
-    ("cliente_ausente",         0.07),
-    ("rechazo_entrega",         0.02),
-    ("demora_pago",             0.04),
+    ("zona_dificil_acceso",     0.05),
+    ("cliente_no_encontrado",   0.07),
+    ("demora_estacionamiento",  0.10),
+    ("congestion_inesperada",   0.08),
+    ("restriccion_acceso",      0.04),
+    ("demora_instalacion",      0.05),
+    ("direccion_incompleta",    0.04),
 ]
 
 NOMBRES = [

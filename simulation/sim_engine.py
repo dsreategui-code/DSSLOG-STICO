@@ -23,7 +23,10 @@ from optimization.route_optimizer import (
 )
 from simulation import events
 from simulation.metrics import compute_kpis, compute_otd_evolution
-from simulation.replanning import evaluar_replanificacion, aplicar_replanificacion
+from simulation.replanning import (
+    evaluar_replanificacion, aplicar_replanificacion,
+    propuesta_es_mejora, motivo_descarte,
+)
 from utils.formatters import hhmm_to_minutes
 from utils.constants import (
     ESTADO_A_TIEMPO, ESTADO_FUERA_VENTANA, ESTADO_FALLIDA,
@@ -43,40 +46,78 @@ def _multiplicador_trafico(min_t: int, perfiles_df: pd.DataFrame) -> float:
     return 1.0
 
 
-def _muestrear_incidencia(prob_df: pd.DataFrame, rng: random.Random) -> tuple:
-    """Devuelve (tipo_incidencia, demora_min) o (None, 0) si no ocurre."""
+# Rango de demora (min) por tipo de incidencia. Cubre los catalogos:
+# legacy (dataset sintetico v1) y v2 (nombres operativos pedidos).
+_DEMORA_POR_INCIDENCIA = {
+    # v1 (compatibilidad)
+    "trafico_severo":          (8, 20),
+    "estacionamiento_dificil": (3, 10),
+    "acceso_restringido":      (4, 12),
+    "cliente_ausente":         (5, 15),
+    "rechazo_entrega":         (2, 8),
+    "demora_pago":             (2, 7),
+    # v2 (catalogo operativo ampliado)
+    "zona_dificil_acceso":     (5, 14),
+    "cliente_no_encontrado":   (5, 15),
+    "demora_estacionamiento":  (3, 10),
+    "congestion_inesperada":   (8, 22),
+    "restriccion_acceso":      (4, 12),
+    "demora_instalacion":      (6, 18),
+    "direccion_incompleta":    (4, 13),
+}
+
+
+def _muestrear_incidencia(prob_df: pd.DataFrame, rng: random.Random,
+                          factor_incidencias: float = 1.0) -> tuple:
+    """Devuelve (tipo_incidencia, demora_min) o (None, 0) si no ocurre.
+
+    factor_incidencias multiplica las probabilidades base (1.0 = comportamiento
+    nominal del dataset). Se clamp-ea a [0, 1] por seguridad.
+    """
     if prob_df is None or prob_df.empty:
         return None, 0
     for _, row in prob_df.iterrows():
-        if rng.random() < float(row["probabilidad"]):
+        prob = max(0.0, min(1.0, float(row["probabilidad"]) * factor_incidencias))
+        if rng.random() < prob:
             tipo = row["incidencia"]
-            demora = {
-                "trafico_severo": rng.uniform(8, 20),
-                "estacionamiento_dificil": rng.uniform(3, 10),
-                "acceso_restringido": rng.uniform(4, 12),
-                "cliente_ausente": rng.uniform(5, 15),
-                "rechazo_entrega": rng.uniform(2, 8),
-                "demora_pago": rng.uniform(2, 7),
-            }.get(tipo, rng.uniform(2, 8))
-            # rechazo_entrega marca fallida; aqui se modela como demora
-            return tipo, demora
+            lo, hi = _DEMORA_POR_INCIDENCIA.get(tipo, (2, 8))
+            return tipo, rng.uniform(lo, hi)
     return None, 0
 
 
-def _estado_entrega(hora_llegada_min: int, ventana_inicio: str,
+def _estado_entrega(hora_inicio_servicio_min: int, ventana_inicio: str,
                     ventana_fin: str, fallida: bool = False) -> str:
+    """Clasifica el estado en base a la hora en la que se INICIA el servicio.
+
+    Llegar antes de ventana_inicio no es 'fuera de ventana': el vehiculo espera
+    y comienza a servir en cuanto se abre la ventana. Solo cuenta como
+    fuera de ventana si el servicio inicia despues de ventana_fin.
+    """
     if fallida:
         return ESTADO_FALLIDA
-    ini = hhmm_to_minutes(ventana_inicio)
     fin = hhmm_to_minutes(ventana_fin)
-    if ini <= hora_llegada_min <= fin:
+    # El servicio efectivo no puede empezar antes de la ventana de hecho:
+    # el caller debe garantizar t = max(t_llegada, ventana_inicio).
+    if hora_inicio_servicio_min <= fin:
         return ESTADO_A_TIEMPO
     return ESTADO_FUERA_VENTANA
 
 
-def _retraso_min(hora_llegada_min: int, ventana_fin: str) -> float:
+def _retraso_min(hora_inicio_servicio_min: int, ventana_fin: str) -> float:
+    """Minutos por encima de ventana_fin; 0 si se sirvio dentro de ventana."""
     fin = hhmm_to_minutes(ventana_fin)
-    return max(0.0, hora_llegada_min - fin)
+    return max(0.0, hora_inicio_servicio_min - fin)
+
+
+def _motivo_fuera_ventana(hora_llegada_min: int, ventana_fin: str,
+                           tipo_incidencia: str) -> str:
+    """Etiqueta diagnostica para entender por que un pedido salio fuera de ventana."""
+    fin = hhmm_to_minutes(ventana_fin)
+    if hora_llegada_min <= fin:
+        return ""
+    if tipo_incidencia:
+        return f"Incidencia: {tipo_incidencia}"
+    return "Acumulacion de tiempos (viaje + servicio previo)"
 
 
 def simular_jornada(dataset: dict, rutas: Dict[str, Ruta] = None,
@@ -108,6 +149,12 @@ def simular_jornada(dataset: dict, rutas: Dict[str, Ruta] = None,
     hora_inicio = hhmm_to_minutes(cfg.get("jornada_inicio", "09:00"))
     hora_fin = hhmm_to_minutes(cfg.get("jornada_fin", "19:00"))
 
+    # Factores operativos (1.0 = comportamiento nominal del dataset)
+    factor_trafico = float(cfg.get("factor_trafico", 1.0))
+    factor_variabilidad_servicio = float(cfg.get("factor_variabilidad_servicio", 1.0))
+    factor_incidencias = float(cfg.get("factor_incidencias", 1.0))
+    sigma_servicio_base = 0.12
+
     if rutas is None:
         rutas = construir_rutas_iniciales(pedidos, vehiculos, velocidad_kmh=velocidad)
     rutas_iniciales = {v: Ruta(**asdict(r)) for v, r in rutas.items()}
@@ -134,14 +181,23 @@ def simular_jornada(dataset: dict, rutas: Dict[str, Ruta] = None,
             p = ped_idx.loc[pid]
 
             dist = _dist_km(cur_lat, cur_lon, p["latitud"], p["longitud"])
-            mult = _multiplicador_trafico(t, perfiles)
+            mult = _multiplicador_trafico(t, perfiles) * factor_trafico
             viaje = (dist / max(velocidad, 1.0)) * 60.0 * mult
             viaje *= float(np_rng.normal(1.0, 0.06))  # ruido viaje
             viaje = max(2.0, viaje)
             t += viaje
+            hora_llegada = t   # llegada fisica al punto
             eventos.append(events.evento_llegada(int(t), veh_id, pid))
 
-            tipo_inc, demora_inc = _muestrear_incidencia(prob_inc, rng)
+            # Si llega antes de la ventana, el vehiculo ESPERA hasta el inicio.
+            ventana_ini_min = hhmm_to_minutes(p["ventana_inicio"])
+            tiempo_espera = max(0.0, ventana_ini_min - t)
+            if tiempo_espera > 0:
+                t = float(ventana_ini_min)
+
+            tipo_inc, demora_inc = _muestrear_incidencia(
+                prob_inc, rng, factor_incidencias=factor_incidencias,
+            )
             fallida = (tipo_inc == "rechazo_entrega") and rng.random() < 0.4
             if tipo_inc:
                 eventos.append(events.evento_incidencia(int(t), veh_id, pid, tipo_inc, demora_inc))
@@ -152,8 +208,17 @@ def simular_jornada(dataset: dict, rutas: Dict[str, Ruta] = None,
                 pendientes = [pp for pp in ruta.secuencia[i+1:]
                               if pp not in pedidos_atendidos]
                 if pendientes:
-                    riesgo = _calcular_riesgo(pendientes, ped_idx, t, cur_lat, cur_lon, velocidad)
+                    riesgo = _calcular_riesgo(
+                        pendientes, ped_idx, t, cur_lat, cur_lon, velocidad,
+                        perfiles=perfiles, factor_trafico=factor_trafico,
+                    )
                     if riesgo["riesgo_min"] > umbral_riesgo:
+                        # Siempre se registra la alerta de riesgo en la bitacora
+                        eventos.append(events.evento_alerta_riesgo(
+                            int(t), veh_id,
+                            f"Riesgo de incumplimiento en {riesgo['pedidos_riesgo']} pedidos pendientes.",
+                        ))
+
                         propuesta = evaluar_replanificacion(
                             ruta, pedidos, pendientes, int(t),
                             motivo=(
@@ -162,32 +227,40 @@ def simular_jornada(dataset: dict, rutas: Dict[str, Ruta] = None,
                             ),
                             velocidad_kmh=velocidad,
                             pos_lat=cur_lat, pos_lon=cur_lon,
+                            perfiles=perfiles, factor_trafico=factor_trafico,
                         )
-                        propuesta_dict = propuesta.to_dict()
-                        alertas.append(propuesta_dict)
-                        eventos.append(events.evento_alerta_riesgo(
-                            int(t), veh_id,
-                            f"Riesgo de incumplimiento en {riesgo['pedidos_riesgo']} pedidos pendientes.",
-                        ))
-                        if aprobacion_automatica and propuesta.otd_propuesto > propuesta.otd_actual:
-                            rutas_actuales = aplicar_replanificacion(rutas_actuales, propuesta)
-                            ruta = rutas_actuales[veh_id]
-                            decisiones.append({
-                                "vehiculo_id": veh_id,
-                                "decision": "aprobada",
-                                "pedidos_recuperados": propuesta.pedidos_recuperados,
-                                "delta_otd": propuesta.otd_propuesto - propuesta.otd_actual,
-                                "timestamp_min": int(t),
-                            })
-                            eventos.append(events.evento_replanificacion(
+
+                        # Filtro estricto: solo aprobamos/elevamos si es mejora real
+                        if propuesta_es_mejora(propuesta):
+                            alertas.append(propuesta.to_dict())
+                            if aprobacion_automatica:
+                                rutas_actuales = aplicar_replanificacion(rutas_actuales, propuesta)
+                                ruta = rutas_actuales[veh_id]
+                                decisiones.append({
+                                    "vehiculo_id": veh_id,
+                                    "decision": "aprobada",
+                                    "pedidos_recuperados": propuesta.pedidos_recuperados,
+                                    "delta_otd": propuesta.otd_propuesto - propuesta.otd_actual,
+                                    "timestamp_min": int(t),
+                                })
+                                eventos.append(events.evento_replanificacion(
+                                    int(t), veh_id,
+                                    "Replanificacion intravehiculo aplicada automaticamente.",
+                                    pendientes,
+                                ))
+                        else:
+                            # No es mejora: queda en bitacora para trazabilidad,
+                            # pero no entra a alertas ni se auto-aprueba.
+                            eventos.append(events.evento_replanificacion_descartada(
                                 int(t), veh_id,
-                                "Replanificacion intravehiculo aplicada automaticamente.",
-                                pendientes,
+                                motivo_descarte(propuesta),
+                                propuesta.otd_propuesto - propuesta.otd_actual,
+                                propuesta.tiempo_propuesto_min - propuesta.tiempo_actual_min,
                             ))
 
-            # Servicio
-            servicio_real = float(np_rng.normal(p["tiempo_servicio_min"],
-                                                p["tiempo_servicio_min"] * 0.12))
+            # Servicio (sigma escalado por factor_variabilidad_servicio)
+            sigma = p["tiempo_servicio_min"] * sigma_servicio_base * factor_variabilidad_servicio
+            servicio_real = float(np_rng.normal(p["tiempo_servicio_min"], max(sigma, 0.01)))
             servicio_real = max(2.0, servicio_real)
             eventos.append(events.evento_inicio_servicio(int(t), veh_id, pid))
             inicio_serv = t
@@ -196,6 +269,8 @@ def simular_jornada(dataset: dict, rutas: Dict[str, Ruta] = None,
             estado = _estado_entrega(int(inicio_serv), p["ventana_inicio"],
                                      p["ventana_fin"], fallida=fallida)
             retraso = _retraso_min(int(inicio_serv), p["ventana_fin"]) if not fallida else 0.0
+            motivo_fv = _motivo_fuera_ventana(int(inicio_serv), p["ventana_fin"],
+                                              tipo_inc or "") if estado == ESTADO_FUERA_VENTANA else ""
             eventos.append(events.evento_fin_servicio(int(t), veh_id, pid, estado))
 
             entregas_rows.append({
@@ -208,15 +283,18 @@ def simular_jornada(dataset: dict, rutas: Dict[str, Ruta] = None,
                 "peso_kg": float(p.get("peso_kg", 0)),
                 "ventana_inicio": p["ventana_inicio"],
                 "ventana_fin": p["ventana_fin"],
-                "hora_llegada_min": int(inicio_serv - servicio_real if False else t - servicio_real),
+                "hora_llegada_min": int(hora_llegada),
                 "inicio_servicio_min": int(inicio_serv),
                 "fin_servicio_min": int(t),
                 "tiempo_viaje_min": round(viaje, 1),
+                "tiempo_espera_min": round(tiempo_espera, 1),
                 "tiempo_servicio_real_min": round(servicio_real, 1),
-                "tiempo_total_min": round(viaje + servicio_real + demora_inc, 1),
+                "tiempo_incidencia_min": round(demora_inc, 1),
+                "tiempo_total_min": round(viaje + tiempo_espera + servicio_real + demora_inc, 1),
                 "estado": estado,
                 "retraso_min": round(retraso, 1),
                 "incidencia": tipo_inc or "",
+                "motivo_fuera_ventana": motivo_fv,
                 "tiempo_op_min": int(t - hora_inicio),
             })
             pedidos_atendidos.add(pid)
@@ -273,8 +351,14 @@ def simular_jornada(dataset: dict, rutas: Dict[str, Ruta] = None,
 
 
 def _calcular_riesgo(pendientes: list, ped_idx: pd.DataFrame, t_actual: float,
-                     cur_lat: float, cur_lon: float, velocidad: float) -> dict:
-    """Estima riesgo acumulado de retraso para los pedidos pendientes."""
+                     cur_lat: float, cur_lon: float, velocidad: float,
+                     perfiles=None, factor_trafico: float = 1.0) -> dict:
+    """Estima riesgo acumulado de retraso para los pedidos pendientes.
+
+    Usa el MISMO modelo de tiempo que la simulacion: multiplicador de trafico
+    por franja x factor_trafico y espera por ventana. De lo contrario el riesgo
+    se subestima y no se generan alertas aunque la jornada real vaya retrasada.
+    """
     total_riesgo = 0.0
     n_riesgo = 0
     lat, lon = cur_lat, cur_lon
@@ -284,7 +368,12 @@ def _calcular_riesgo(pendientes: list, ped_idx: pd.DataFrame, t_actual: float,
             continue
         p = ped_idx.loc[pid]
         d = _dist_km(lat, lon, p["latitud"], p["longitud"])
-        t += (d / max(velocidad, 1.0)) * 60.0
+        mult = _multiplicador_trafico(int(t), perfiles) * factor_trafico
+        t += (d / max(velocidad, 1.0)) * 60.0 * mult
+        # Espera por ventana (coherente con el motor real).
+        v_ini = hhmm_to_minutes(p["ventana_inicio"])
+        if t < v_ini:
+            t = float(v_ini)
         v_fin = hhmm_to_minutes(p["ventana_fin"])
         if t > v_fin:
             total_riesgo += (t - v_fin)
@@ -295,8 +384,16 @@ def _calcular_riesgo(pendientes: list, ped_idx: pd.DataFrame, t_actual: float,
 
 
 def simular_escenarios(dataset: dict, configuracion: dict,
-                       iteraciones: int = 30) -> dict:
-    """Corre Monte Carlo sobre los escenarios definidos en configuracion."""
+                       iteraciones: int = 30,
+                       progress_callback=None) -> dict:
+    """Corre Monte Carlo sobre los escenarios definidos en configuracion.
+
+    Args:
+        progress_callback: si se entrega, se invoca con
+            (escenario_id, iteracion_actual, total_iteraciones, status)
+            donde status in {"start", "progress", "done"}.
+            Permite a la UI mostrar barras de progreso por escenario.
+    """
     escenarios = configuracion.get("escenarios_activos") or [
         "sin_dss", "solo_ruta", "dss_completo"
     ]
@@ -308,6 +405,13 @@ def simular_escenarios(dataset: dict, configuracion: dict,
 
     rutas_optimizadas = construir_rutas_iniciales(pedidos, vehiculos, velocidad_kmh=velocidad)
 
+    def _notify(esc, it, total, status):
+        if progress_callback is not None:
+            try:
+                progress_callback(esc, it, total, status)
+            except Exception:
+                pass
+
     iteraciones_rows = []
     resultados_finales = {}
     for esc in escenarios:
@@ -315,6 +419,8 @@ def simular_escenarios(dataset: dict, configuracion: dict,
         usa_optimizacion = (esc != "sin_dss")
         rutas_base = rutas_optimizadas if usa_optimizacion else \
             _rutas_baseline_sin_dss(pedidos, vehiculos)
+
+        _notify(esc, 0, iteraciones, "start")
 
         agregados_otd = []
         ultimo = None
@@ -332,9 +438,12 @@ def simular_escenarios(dataset: dict, configuracion: dict,
             })
             agregados_otd.append(kpis.get("otd", 0))
             ultimo = res
+            _notify(esc, it + 1, iteraciones, "progress")
+
         resultados_finales[esc] = ultimo
         resultados_finales[esc]["otd_promedio_iter"] = float(np.mean(agregados_otd)) if agregados_otd else 0.0
         resultados_finales[esc]["otd_std_iter"] = float(np.std(agregados_otd)) if agregados_otd else 0.0
+        _notify(esc, iteraciones, iteraciones, "done")
 
     return {
         "escenarios": resultados_finales,

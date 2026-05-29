@@ -55,8 +55,15 @@ def construir_rutas_or_tools(pedidos: pd.DataFrame, vehiculos: pd.DataFrame,
                              jornada_fin: str = "19:00",
                              time_limit_seconds: int = 8,
                              slack_minutos: int = 30,
+                             factor_balance: float = 1.0,
                              ) -> Optional[Dict[str, Ruta]]:
     """Resuelve CVRPTW con OR-Tools.
+
+    Args:
+        factor_balance: limita la capacidad efectiva de cada vehiculo a
+            ceil(N/V * factor_balance) para forzar que el solver use TODOS los
+            vehiculos disponibles. 1.0 = reparto exacto (80/10 = 8). 1.05 da
+            un margen de 1-2 pedidos sin permitir consolidacion en pocas rutas.
 
     Devuelve dict {vehiculo_id: Ruta} o None si no fue posible obtener solucion.
     """
@@ -72,8 +79,14 @@ def construir_rutas_or_tools(pedidos: pd.DataFrame, vehiculos: pd.DataFrame,
     # Indices: 0 = almacen (deposito), 1..n = pedidos
     dist_mat, time_mat = _build_distance_time_matrices(pedidos_idx, velocidad_kmh)
 
-    # Capacidades (unidades y kg) por vehiculo
-    capacidades_u = [int(v) for v in vehiculos["capacidad_unidades"].tolist()]
+    # Capacidad efectiva de balance: techo de pedidos por vehiculo que fuerza
+    # al solver a repartir entre toda la flota en lugar de concentrar rutas.
+    max_balance_u = max(1, math.ceil(n / max(num_vehicles, 1) * factor_balance))
+
+    # Capacidades (unidades y kg) por vehiculo - acotadas por el factor de balance
+    capacidades_u = [
+        min(int(v), max_balance_u) for v in vehiculos["capacidad_unidades"].tolist()
+    ]
     capacidades_kg = [int(v) for v in vehiculos["capacidad_kg"].tolist()]
     demanda_u = [0] + [1] * n
     demanda_kg = [0] + [int(round(float(p))) for p in pedidos_idx["peso_kg"].tolist()]

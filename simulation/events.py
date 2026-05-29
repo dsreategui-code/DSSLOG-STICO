@@ -70,3 +70,27 @@ def evento_replanificacion(min_t: int, vehiculo_id: str, motivo: str,
     return Evento(min_t, "replanificacion", vehiculo_id,
                   detalle=motivo, severidad="info",
                   metadata={"pedidos_afectados": pedidos_afectados})
+
+
+def evento_replanificacion_descartada(min_t: int, vehiculo_id: str,
+                                      motivo_descarte: str,
+                                      delta_otd: float,
+                                      delta_tiempo_min: float) -> Evento:
+    """Una propuesta fue evaluada pero NO es una mejora segun los criterios.
+
+    Queda en la bitacora para trazabilidad, pero no se eleva como alerta
+    aprobable ni se aplica automaticamente.
+    """
+    return Evento(
+        min_t, "replanificacion_descartada", vehiculo_id,
+        detalle=(
+            f"Propuesta descartada: {motivo_descarte} "
+            f"(dOTD={delta_otd:+.1f}%, dTiempo={delta_tiempo_min:+.1f} min)."
+        ),
+        severidad="info",
+        metadata={
+            "motivo_descarte": motivo_descarte,
+            "delta_otd": delta_otd,
+            "delta_tiempo_min": delta_tiempo_min,
+        },
+    )

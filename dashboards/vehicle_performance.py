@@ -11,7 +11,7 @@ from simulation.metrics import compute_vehicle_performance
 def render_vehicle_performance(entregas: pd.DataFrame, vehiculos: pd.DataFrame):
     df_veh = compute_vehicle_performance(entregas, vehiculos)
     if df_veh.empty:
-        st.info("Sin datos de vehiculos disponibles.")
+        st.info("Sin datos de vehiculos con los filtros actuales.")
         return
 
     col_l, col_r = st.columns(2)
@@ -27,8 +27,9 @@ def render_vehicle_performance(entregas: pd.DataFrame, vehiculos: pd.DataFrame):
 
     st.markdown("**Detalle por vehiculo**")
     cols = ["vehiculo_id", "pedidos_asignados", "a_tiempo", "completadas",
-            "fallidas", "otd", "retraso_prom", "uso_capacidad_pct",
-            "uso_capacidad_kg_pct"]
+            "fallidas", "otd", "retraso_prom",
+            "tiempo_servicio_total", "tiempo_servicio_prom",
+            "uso_capacidad_pct", "uso_capacidad_kg_pct"]
     cols = [c for c in cols if c in df_veh.columns]
     view = df_veh[cols].rename(columns={
         "vehiculo_id": "Vehiculo",
@@ -38,6 +39,8 @@ def render_vehicle_performance(entregas: pd.DataFrame, vehiculos: pd.DataFrame):
         "fallidas": "Fallidas",
         "otd": "OTD (%)",
         "retraso_prom": "Retraso prom (min)",
+        "tiempo_servicio_total": "Servicio total (min)",
+        "tiempo_servicio_prom": "Servicio prom (min)",
         "uso_capacidad_pct": "Uso unid. (%)",
         "uso_capacidad_kg_pct": "Uso kg (%)",
     })

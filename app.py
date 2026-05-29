@@ -6,6 +6,7 @@ from components.layout import (
     render_view_title, render_divider, render_footer,
 )
 from components.buttons import secondary
+from components.navigation import render_global_actions
 from utils.state import init_state
 from utils.constants import (
     VISTA_HOME, VISTA_VALIDATION_DATA, VISTA_VALIDATION_CONFIG, VISTA_VALIDATION_SIMULATION,
@@ -71,6 +72,7 @@ def main():
     apply_global_styles()
     init_state()
     render_app_header()
+    render_global_actions()
 
     vista = st.session_state.get("vista", VISTA_HOME)
     handler = ROUTES.get(vista)

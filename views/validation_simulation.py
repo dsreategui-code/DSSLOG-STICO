@@ -1,24 +1,47 @@
-"""Validacion - Ejecucion de la simulacion Monte Carlo multi-escenario."""
+"""Validacion - Ejecucion del experimento Monte Carlo multi-escenario.
+
+La vista muestra una barra de progreso por escenario con tres estados visibles:
+pendiente, en ejecucion, completado. No se muestran cards de resultados (esos
+viven en la vista de Resultados).
+"""
 import streamlit as st
 
 from components.layout import render_view_title, render_divider, render_footer
 from components.navigation import render_step_breadcrumb, navigate_to
 from components.buttons import primary, secondary
-from components.cards import kpi_row
 from services.validation_service import run_validation, label_escenario
 from utils.state import log_bitacora
-from utils.formatters import fmt_pct, fmt_int
 from utils.constants import (
     VISTA_VALIDATION_CONFIG, VISTA_VALIDATION_RESULTS,
 )
+
+
+# Etiquetas de estado por escenario
+_STATUS_PENDIENTE  = "Pendiente"
+_STATUS_EN_CURSO   = "En ejecucion"
+_STATUS_COMPLETADO = "Completado"
+
+
+def _status_html(label: str) -> str:
+    color = {
+        _STATUS_PENDIENTE:  "#98A2B3",
+        _STATUS_EN_CURSO:   "#1570EF",
+        _STATUS_COMPLETADO: "#027A48",
+    }.get(label, "#667085")
+    return (
+        f'<span style="display:inline-block; padding:0.18rem 0.7rem; '
+        f'border-radius:999px; font-size:0.74rem; font-weight:500; '
+        f'background:{color}14; color:{color}; border:1px solid {color}33;">'
+        f'{label}</span>'
+    )
 
 
 def render():
     render_view_title(
         "Simulacion",
         "Ejecuta el experimento sobre los escenarios seleccionados. Cada escenario "
-        "corre el numero de iteraciones definido, con variabilidad de trafico, "
-        "estacionamiento, tiempos de servicio e incidencias."
+        "corre las iteraciones definidas con variabilidad de trafico, tiempos de "
+        "servicio e incidencias."
     )
     render_step_breadcrumb()
 
@@ -34,31 +57,61 @@ def render():
     total_runs = len(escenarios) * iteraciones
 
     st.info(
-        f"Escenarios: **{len(escenarios)}** · Iteraciones por escenario: **{iteraciones}** "
-        f"· Total de corridas: **{total_runs}** · Semilla: {cfg.get('semilla', 42)}"
+        f"Escenarios: **{len(escenarios)}**  |  Iteraciones por escenario: "
+        f"**{iteraciones}**  |  Total de corridas: **{total_runs}**  |  "
+        f"Semilla: {cfg.get('semilla', 42)}"
     )
+
+    # Panel de progreso por escenario - se renderiza siempre con estado Pendiente
+    st.markdown("#### Progreso por escenario")
+    progress_slots = {}
+    for esc in escenarios:
+        row = st.container()
+        with row:
+            c_lbl, c_status, c_count, c_bar = st.columns([3, 2, 1, 6])
+            c_lbl.markdown(f"**{label_escenario(esc)}**")
+            slot_status = c_status.empty()
+            slot_count = c_count.empty()
+            slot_bar = c_bar.progress(0)
+            slot_status.markdown(_status_html(_STATUS_PENDIENTE), unsafe_allow_html=True)
+            slot_count.markdown(f"0 / {iteraciones}")
+            progress_slots[esc] = {
+                "status": slot_status,
+                "count": slot_count,
+                "bar": slot_bar,
+            }
+
+    st.write("")
 
     if primary("Ejecutar experimento", key="val_run_sim",
                use_container_width=False, disabled=not escenarios):
-        with st.spinner("Ejecutando Monte Carlo..."):
-            resultados = run_validation(dataset, cfg)
-        st.session_state.resultados = resultados
-        log_bitacora("Validacion - simulacion ejecutada",
-                     f"{len(escenarios)} escenarios · {iteraciones} iter")
-        st.success("Simulacion completada.")
+        def _on_progress(esc, it, total, status):
+            s = progress_slots.get(esc)
+            if not s:
+                return
+            if status == "start":
+                s["status"].markdown(_status_html(_STATUS_EN_CURSO),
+                                     unsafe_allow_html=True)
+                s["count"].markdown(f"0 / {total}")
+                s["bar"].progress(0)
+            elif status == "progress":
+                s["bar"].progress(min(1.0, it / max(total, 1)))
+                s["count"].markdown(f"{it} / {total}")
+            elif status == "done":
+                s["status"].markdown(_status_html(_STATUS_COMPLETADO),
+                                     unsafe_allow_html=True)
+                s["bar"].progress(1.0)
+                s["count"].markdown(f"{total} / {total}")
 
-    res = st.session_state.get("resultados")
-    if res and res.get("kpis_por_escenario") is not None and not res["kpis_por_escenario"].empty:
-        st.markdown("#### Resumen por escenario")
-        cols = st.columns(len(res["kpis_por_escenario"]))
-        for col, (_, r) in zip(cols, res["kpis_por_escenario"].iterrows()):
-            with col:
-                kpi_row([
-                    {"label": label_escenario(r["escenario"]),
-                     "value": fmt_pct(r.get("otd", 0)),
-                     "delta": f"OTIF {fmt_pct(r.get('otif', 0))}",
-                     "delta_dir": "flat"},
-                ])
+        resultados = run_validation(dataset, cfg, progress_callback=_on_progress)
+        st.session_state.resultados = resultados
+        log_bitacora(
+            "Validacion - simulacion ejecutada",
+            f"{len(escenarios)} escenarios - {iteraciones} iter por escenario",
+        )
+        st.success(
+            "Simulacion completada. Los resultados detallados estan en la pantalla siguiente."
+        )
 
     render_divider()
     col_l, _, col_r = st.columns([1, 4, 1])

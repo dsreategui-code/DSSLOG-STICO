@@ -6,14 +6,19 @@ from simulation.metrics import aggregate_iterations
 
 
 ESCENARIOS_DEFAULT = [
-    {"id": "sin_dss",      "nombre": "Sin DSS"},
-    {"id": "solo_ruta",    "nombre": "Ruta optimizada"},
+    {"id": "sin_dss",      "nombre": "Operacion sin DSS"},
+    {"id": "solo_ruta",    "nombre": "DSS parcial"},
     {"id": "dss_completo", "nombre": "DSS completo"},
 ]
 
 
-def run_validation(dataset: dict, configuracion: dict) -> dict:
+def run_validation(dataset: dict, configuracion: dict,
+                   progress_callback=None) -> dict:
     """Ejecuta el experimento Monte Carlo y devuelve resultados agregados.
+
+    Args:
+        progress_callback: callback(escenario_id, iteracion, total, status)
+            propagado al motor de simulacion para reflejar progreso en la UI.
 
     Estructura de retorno:
         {
@@ -25,7 +30,11 @@ def run_validation(dataset: dict, configuracion: dict) -> dict:
         }
     """
     iteraciones = int(configuracion.get("iteraciones", 30))
-    raw = simular_escenarios(dataset, configuracion, iteraciones=iteraciones)
+    raw = simular_escenarios(
+        dataset, configuracion,
+        iteraciones=iteraciones,
+        progress_callback=progress_callback,
+    )
     iters_df = raw["iteraciones"]
     resumen = aggregate_iterations(iters_df)
 

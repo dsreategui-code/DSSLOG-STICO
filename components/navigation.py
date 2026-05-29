@@ -3,10 +3,9 @@ import streamlit as st
 from utils.constants import (
     MODO_VALIDACION, MODO_DEMOSTRACION,
     ROL_SUPERVISOR, ROL_CONDUCTOR,
-    VISTA_HOME,
+    VISTA_HOME, VISTA_DEMO_ROLE_SELECTION,
     VISTA_VALIDATION_DATA, VISTA_VALIDATION_CONFIG, VISTA_VALIDATION_SIMULATION,
     VISTA_VALIDATION_RESULTS, VISTA_VALIDATION_EXPORT,
-    VISTA_DEMO_ROLE_SELECTION,
     VISTA_SUPERVISOR_DATA, VISTA_SUPERVISOR_CONFIG, VISTA_SUPERVISOR_ROUTES,
     VISTA_SUPERVISOR_SIMULATION, VISTA_SUPERVISOR_ALERTS, VISTA_SUPERVISOR_RESULTS,
     VISTA_SUPERVISOR_EXPORT, VISTA_DRIVER,
@@ -108,7 +107,50 @@ def navigate_to(vista: str):
 
 
 def back_home():
+    """Vuelve a la pantalla inicial sin descartar dataset, rutas ni resultados."""
     st.session_state.vista = VISTA_HOME
     st.session_state.modo = None
     st.session_state.rol = None
     st.rerun()
+
+
+def back_to_role_selection():
+    """Vuelve a la pantalla de seleccion de rol conservando todo el contexto.
+
+    Mantiene dataset, configuracion, rutas iniciales/finales, resultados y alertas
+    para que el Conductor pueda consultar su informacion despues de que el Supervisor
+    haya generado las rutas o ejecutado la simulacion.
+    """
+    st.session_state.vista = VISTA_DEMO_ROLE_SELECTION
+    st.session_state.rol = None
+    st.rerun()
+
+
+def render_global_actions():
+    """Acciones globales visibles en todas las vistas operativas.
+
+    - Boton 'Inicio': siempre disponible cuando hay un modo activo.
+    - Boton 'Cambiar de rol': solo en modo Demostracion con un rol asignado.
+
+    No se renderiza en la pantalla inicial (Home) ni en la seleccion de rol,
+    porque alli ya hay botones explicitos.
+    """
+    modo = st.session_state.get("modo")
+    rol = st.session_state.get("rol")
+    vista = st.session_state.get("vista")
+
+    if not modo or vista in (VISTA_HOME, VISTA_DEMO_ROLE_SELECTION):
+        return
+
+    mostrar_cambio_rol = (modo == MODO_DEMOSTRACION) and bool(rol)
+
+    cols = st.columns([1, 1, 6]) if mostrar_cambio_rol else st.columns([1, 7])
+    with cols[0]:
+        if st.button("Inicio", key="global_btn_home",
+                     use_container_width=True):
+            back_home()
+    if mostrar_cambio_rol:
+        with cols[1]:
+            if st.button("Cambiar de rol", key="global_btn_role",
+                         use_container_width=True):
+                back_to_role_selection()
