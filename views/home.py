@@ -3,8 +3,8 @@ import streamlit as st
 from components.layout import render_view_title, render_divider, render_footer
 from components.cards import info_card, feature_card
 from utils.constants import (
-    MODO_VALIDACION, MODO_DEMOSTRACION,
-    VISTA_VALIDATION_DATA, VISTA_DEMO_ROLE_SELECTION,
+    MODO_VALIDACION, MODO_DEMOSTRACION, MODO_BENCHMARK,
+    VISTA_VALIDATION_DATA, VISTA_DEMO_ROLE_SELECTION, VISTA_BENCHMARK,
 )
 
 
@@ -52,6 +52,29 @@ def render():
             st.session_state.modo = MODO_DEMOSTRACION
             st.session_state.rol = None
             st.session_state.vista = VISTA_DEMO_ROLE_SELECTION
+            st.rerun()
+
+    render_divider()
+
+    # Acceso secundario: benchmark con literatura (ALM RRC). Aislado del DSS.
+    st.markdown("")
+    bcol1, bcol2 = st.columns([3, 1], gap="medium")
+    with bcol1:
+        info_card(
+            "Benchmark con literatura (ALM RRC)",
+            "Valida el motor de ruteo del DSS contra rutas reales del Amazon Last Mile "
+            "Routing Research Challenge. Compara secuenciacion y tiempos; no mezcla "
+            "variables locales de Lima.",
+            eyebrow="Validacion externa  /  opcional",
+        )
+    with bcol2:
+        st.write("")
+        st.write("")
+        if st.button("Abrir benchmark", key="home_benchmark",
+                     use_container_width=True):
+            st.session_state.modo = MODO_BENCHMARK
+            st.session_state.rol = None
+            st.session_state.vista = VISTA_BENCHMARK
             st.rerun()
 
     render_divider()

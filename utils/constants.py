@@ -3,6 +3,7 @@
 # Modos
 MODO_VALIDACION = "validacion"
 MODO_DEMOSTRACION = "demostracion"
+MODO_BENCHMARK = "benchmark"
 
 # Roles
 ROL_SUPERVISOR = "supervisor"
@@ -24,6 +25,7 @@ VISTA_SUPERVISOR_ALERTS = "supervisor_alerts"
 VISTA_SUPERVISOR_RESULTS = "supervisor_results"
 VISTA_SUPERVISOR_EXPORT = "supervisor_export"
 VISTA_DRIVER = "driver_view"
+VISTA_BENCHMARK = "benchmark"
 
 # Zonas operativas
 ZONAS_OPERATIVAS = [

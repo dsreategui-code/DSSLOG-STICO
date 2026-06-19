@@ -15,6 +15,12 @@ __pycache__/
 data/outputs/
 data/datasets/
 
+# Benchmark ALM RRC: datos pesados y cache (no versionar)
+data_benchmark/raw_json/
+data_benchmark/processed_csv/
+data_benchmark/processed_excel/
+data_benchmark/cache/
+
 # IDE
 .vscode/
 .idea/
