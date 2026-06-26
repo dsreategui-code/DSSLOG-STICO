@@ -55,11 +55,19 @@ def construir_rutas_or_tools(pedidos: pd.DataFrame, vehiculos: pd.DataFrame,
                              jornada_fin: str = "19:00",
                              time_limit_seconds: int = 8,
                              slack_minutos: int = 30,
+                             espera_max_min: Optional[int] = None,
                              factor_balance: float = 1.0,
                              ) -> Optional[Dict[str, Ruta]]:
     """Resuelve CVRPTW con OR-Tools.
 
     Args:
+        slack_minutos: TOLERANCIA de ventana (ensancha cada ventana +/- este valor).
+        espera_max_min: ESPERA maxima permitida en un nodo (el vehiculo puede llegar
+            antes de que abra la ventana y esperar). None => jornada completa (CVRPTW
+            estandar: siempre se puede esperar). Esta separado de `slack_minutos` para
+            no confundir "esperar a que abra" con "tolerar llegar tarde": esperar nunca
+            viola la ventana ni suma al costo (el costo es tiempo de viaje), solo amplia
+            el conjunto factible y evita descartar clientes a los que se llega temprano.
         factor_balance: limita la capacidad efectiva de cada vehiculo a
             ceil(N/V * factor_balance) para forzar que el solver use TODOS los
             vehiculos disponibles. 1.0 = reparto exacto (80/10 = 8). 1.05 da
@@ -94,6 +102,10 @@ def construir_rutas_or_tools(pedidos: pd.DataFrame, vehiculos: pd.DataFrame,
     # Ventanas horarias en minutos desde el inicio de jornada (0..600 si 09-19)
     t0 = hhmm_to_minutes(jornada_inicio)
     horizonte = hhmm_to_minutes(jornada_fin) - t0
+    # Espera por defecto = jornada completa (CVRPTW estandar: siempre se puede esperar).
+    if espera_max_min is None:
+        espera_max_min = horizonte
+    espera_max_min = max(0, int(espera_max_min))
     ventanas = [(0, horizonte)]
     tiempos_servicio = [0]
     for _, p in pedidos_idx.iterrows():
@@ -114,11 +126,12 @@ def construir_rutas_or_tools(pedidos: pd.DataFrame, vehiculos: pd.DataFrame,
     transit_idx = routing.RegisterTransitCallback(time_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_idx)
 
-    # Dimension de tiempo con ventanas
+    # Dimension de tiempo con ventanas. slack_max = ESPERA permitida (no la tolerancia):
+    # el vehiculo puede llegar antes de que abra una ventana y esperar.
     routing.AddDimension(
         transit_idx,
-        slack_max=slack_minutos,
-        capacity=horizonte + slack_minutos,
+        slack_max=espera_max_min,
+        capacity=horizonte + espera_max_min,
         fix_start_cumul_to_zero=False,
         name="Time",
     )

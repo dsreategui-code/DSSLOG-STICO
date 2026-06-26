@@ -1,0 +1,4 @@
+instance_uid,motivo_seleccion,cargable,tiene_clientes,tiene_deposito,tiene_demanda,tiene_capacidad,tiene_vehiculos,tiene_ventanas,n_clientes,num_vehicles,error
+twvrp_50_single_depot__0,"piloto: 1 instancia por tamano (50/100/200), primera de cada subset",True,True,True,True,True,True,True,50,12,
+twvrp_100_single_depot__0,"piloto: 1 instancia por tamano (50/100/200), primera de cada subset",True,True,True,True,True,True,True,100,25,
+twvrp_200_single_depot__0,"piloto: 1 instancia por tamano (50/100/200), primera de cada subset",True,True,True,True,True,True,True,200,48,

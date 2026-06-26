@@ -1,0 +1,1 @@
+model_name,instance_id,instance_size,problem_type,depot_type,vehicle_type,run_id,total_cost,total_distance,total_time,runtime_seconds,feasibility,constraint_violation_rate,time_window_violations,otd_benchmark,vehicle_utilization,demand_fulfillment,robustness_inputs,error_message,status

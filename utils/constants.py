@@ -3,6 +3,7 @@
 # Modos
 MODO_VALIDACION = "validacion"
 MODO_DEMOSTRACION = "demostracion"
+# Reservado para el futuro modo benchmark (SVRPBench). Sin vista activa por ahora.
 MODO_BENCHMARK = "benchmark"
 
 # Roles
@@ -25,6 +26,7 @@ VISTA_SUPERVISOR_ALERTS = "supervisor_alerts"
 VISTA_SUPERVISOR_RESULTS = "supervisor_results"
 VISTA_SUPERVISOR_EXPORT = "supervisor_export"
 VISTA_DRIVER = "driver_view"
+# Reservado para el futuro modo benchmark (SVRPBench). Sin ruta activa por ahora.
 VISTA_BENCHMARK = "benchmark"
 
 # Zonas operativas

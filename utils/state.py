@@ -19,7 +19,7 @@ DEFAULT_STATE = {
     "decisiones_supervisor": [],
     "exportacion_lista": False,
     "vehiculo_conductor": None,
-    # Modo benchmark (ALM RRC) - aislado del flujo DSS.
+    # Reservado para el futuro modo benchmark (SVRPBench) - aislado del flujo DSS.
     "benchmark_resultados": None,
     "benchmark_seleccion": None,
 }

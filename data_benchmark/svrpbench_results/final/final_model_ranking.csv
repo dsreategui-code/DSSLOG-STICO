@@ -1,0 +1,4 @@
+rank,model_name,costo_prom,costo_min,costo_max,costo_std,runtime_seconds,feasibility,constraint_violation_rate,otd_benchmark,time_window_violations,vehicle_utilization,demand_fulfillment,robustness,n_exitosas,n_fallidas,n_infactibles,n_timeouts
+1,or-tools,1070.7526,619.1758,1616.7377,325.038,1.1002,1.0,43.7723,0.558,59.7267,1.0,1.0,33.7696,150,0,0,0
+2,nn2opt,1228.356,699.2416,1869.3923,391.4923,0.0565,1.0,33.9704,0.6575,52.02,1.0,1.0,45.608,150,0,0,0
+3,DSS,2250.6981,802.4244,4428.2887,1270.8708,10.017,1.0,0.0,1.0,0.0,0.0515,1.0,71.4884,150,0,0,0

@@ -32,12 +32,13 @@ from views import supervisor_alerts as v_sup_alerts
 from views import supervisor_results as v_sup_res
 from views import supervisor_export as v_sup_exp
 from views import driver_view as v_driver
-from views import benchmark_view as v_benchmark
+from views import benchmark_svrpbench as v_bench
 
 
 ROUTES = {
     VISTA_HOME: v_home.render,
     VISTA_DEMO_ROLE_SELECTION: v_role.render,
+    VISTA_BENCHMARK: v_bench.render,
 
     VISTA_VALIDATION_DATA: v_val_data.render,
     VISTA_VALIDATION_CONFIG: v_val_cfg.render,
@@ -54,8 +55,6 @@ ROUTES = {
     VISTA_SUPERVISOR_EXPORT: v_sup_exp.render,
 
     VISTA_DRIVER: v_driver.render,
-
-    VISTA_BENCHMARK: v_benchmark.render,
 }
 
 

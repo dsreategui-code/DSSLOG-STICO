@@ -1,0 +1,4 @@
+instance_size,costo_prom,costo_min,costo_max,costo_std,runtime_seconds,feasibility,constraint_violation_rate,otd_benchmark,time_window_violations,vehicle_utilization,demand_fulfillment,robustness,n_exitosas,n_fallidas,n_infactibles,n_timeouts
+50,828.5148,619.1758,1099.9636,108.1655,3.6783,1.0,12.4649,0.8728,6.1467,0.6977,1.0,95.5508,150,0,0,0
+100,1325.7502,908.4583,2324.6732,410.7322,3.7,1.0,25.268,0.7448,25.18,0.68,1.0,402.8166,150,0,0,0
+200,2395.5417,1385.1721,4428.2887,1109.941,3.7954,1.0,40.0099,0.5979,80.42,0.6738,1.0,1097.4888,150,0,0,0

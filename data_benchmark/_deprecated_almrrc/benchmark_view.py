@@ -32,37 +32,39 @@ def render():
         eyebrow="ALM RRC 2021  /  Validacion externa",
     )
 
-    # 1) Dataset transformado ausente.
-    if not paths.benchmark_disponible():
-        render_empty_state(
-            "Dataset ALM RRC no encontrado",
-            "Coloca el dataset transformado en data_benchmark/processed_csv/ "
-            "(06_dss_pedidos_base.csv y 05_travel_times_long.csv, entre otros).",
-        )
+    # El cache es autosuficiente para correr el benchmark (no necesita el dataset
+    # crudo de 9.5 GB en runtime). Por eso se verifica el cache PRIMERO: asi el
+    # benchmark funciona en la nube (Community Cloud) con un cache versionado,
+    # aunque los archivos pesados no esten presentes.
+    cache_ok = alm_loader.cache_listo()
+
+    if not cache_ok:
+        if paths.benchmark_disponible():
+            # Hay dataset crudo (entorno local) pero falta construir el cache.
+            render_empty_state(
+                "Cache de benchmark no preparado",
+                "Ejecuta una sola vez en la terminal: "
+                "python -m benchmark.prepare_cache --n-rutas 30",
+            )
+            st.caption(
+                "El archivo de tiempos pesa ~9.5 GB; la preparacion extrae una muestra "
+                "compacta para que la app no cargue ese archivo en tiempo de ejecucion."
+            )
+        else:
+            # Ni cache ni dataset crudo (p. ej. despliegue sin datos del benchmark).
+            render_empty_state(
+                "Benchmark no disponible en este entorno",
+                "No hay un cache de rutas versionado ni el dataset transformado. "
+                "El benchmark se ejecuta en local; en la nube se incluye solo una "
+                "muestra precomputada de rutas High Quality si fue versionada.",
+            )
         render_divider()
         if secondary("Inicio", key="bm_back_1"):
             _volver_inicio()
         render_footer()
         return
 
-    # 2) Cache no preparado.
-    if not alm_loader.cache_listo():
-        render_empty_state(
-            "Cache de benchmark no preparado",
-            "Ejecuta una sola vez en la terminal: "
-            "python -m benchmark.prepare_cache --n-rutas 30",
-        )
-        st.caption(
-            "El archivo de tiempos pesa ~9.5 GB; la preparacion extrae una muestra "
-            "compacta para que la app no cargue ese archivo en tiempo de ejecucion."
-        )
-        render_divider()
-        if secondary("Inicio", key="bm_back_2"):
-            _volver_inicio()
-        render_footer()
-        return
-
-    # 3) Cache listo: seleccion + ejecucion.
+    # Cache listo: seleccion + ejecucion.
     indice = alm_loader.cargar_indice()
     st.caption(f"Rutas disponibles en el cache: {len(indice)}  |  "
                f"Fuente: ALM RRC 2021 (transformado).")

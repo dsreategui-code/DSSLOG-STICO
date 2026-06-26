@@ -1,0 +1,124 @@
+{
+  "fecha_generacion": "2026-06-25",
+  "dataset": "SVRPBench (MBZUAI/svrp-bench, parquet, split test)",
+  "fuente_cruda": "data_benchmark\\svrpbench_raw\\svrpbench_test.parquet",
+  "criterios_inclusion": {
+    "variante": "TWCVRP (subset_name comienza con 'twvrp_')",
+    "deposito": "single-depot ('single_depot' in subset_name)",
+    "vehiculos": "multi-vehicle (num_vehicles > 1)",
+    "tamanos": [
+      50,
+      100,
+      200
+    ],
+    "capacidades": "len(vehicle_capacities) == num_vehicles",
+    "campos_criticos_no_nulos": true
+  },
+  "criterios_exclusion": {
+    "cvrp_sin_ventanas": true,
+    "multi_depot_o_depots_equal_city": true,
+    "single_vehicle": true,
+    "tamanos_fuera_de_50_100_200": true,
+    "capacidades_inconsistentes": true,
+    "campos_criticos_nulos": true
+  },
+  "campos_usados_para_filtrar": {
+    "tipo_problema": "subset_name (prefijo twvrp_/cvrp_)",
+    "ventanas_horarias": "subset_name (variante twvrp_); VALORES no presentes en el parquet",
+    "cantidad_clientes": "len(locations) - 1 (y tamano en subset_name)",
+    "tipo_deposito": "subset_name (single_depot/...)",
+    "numero_depositos": "convencion: locations[0] = deposito unico",
+    "cantidad_vehiculos": "num_vehicles",
+    "config_vehicular": "subset_name (sufijo) + num_vehicles",
+    "demanda": "demands",
+    "capacidad": "vehicle_capacities",
+    "variables_estocasticas": "NO en el parquet; provienen del generador de la suite"
+  },
+  "n_instancias_originales": 560,
+  "n_instancias_seleccionadas": 30,
+  "n_instancias_excluidas": 530,
+  "conteos_por_tamano": {
+    "50": 10,
+    "100": 10,
+    "200": 10
+  },
+  "conteos_por_variante": {
+    "twcvrp": 30
+  },
+  "conteos_por_deposito": {
+    "single_depot": 30
+  },
+  "conteos_por_vehiculo": {
+    "multi": 30
+  },
+  "traza_filtros": [
+    {
+      "paso": "F0_universo",
+      "regla": "todas las instancias del parquet",
+      "antes": 560,
+      "despues": 560,
+      "excluidas_en_este_paso": 0
+    },
+    {
+      "paso": "F1_variante_TWCVRP",
+      "regla": "subset_name comienza con 'twvrp_' (variante con ventanas)",
+      "antes": 560,
+      "despues": 140,
+      "excluidas_en_este_paso": 420
+    },
+    {
+      "paso": "F2_single_depot",
+      "regla": "'single_depot' in subset_name",
+      "antes": 140,
+      "despues": 70,
+      "excluidas_en_este_paso": 70
+    },
+    {
+      "paso": "F3_tamano_50_100_200",
+      "regla": "tamano derivado en {50,100,200}",
+      "antes": 70,
+      "despues": 30,
+      "excluidas_en_este_paso": 40
+    },
+    {
+      "paso": "F4_multi_vehicle",
+      "regla": "num_vehicles > 1",
+      "antes": 30,
+      "despues": 30,
+      "excluidas_en_este_paso": 0
+    },
+    {
+      "paso": "F5_capacidades_consistentes",
+      "regla": "len(vehicle_capacities) == num_vehicles",
+      "antes": 30,
+      "despues": 30,
+      "excluidas_en_este_paso": 0
+    },
+    {
+      "paso": "F6_campos_criticos_no_nulos",
+      "regla": "clientes+deposito+demanda+capacidad+vehiculos+id+tamano no nulos",
+      "antes": 30,
+      "despues": 30,
+      "excluidas_en_este_paso": 0
+    }
+  ],
+  "validacion_campos": {
+    "tienen_clientes": true,
+    "tienen_deposito": true,
+    "tienen_demanda": true,
+    "tienen_capacidad": true,
+    "tienen_ventanas_valores": false,
+    "son_variante_twcvrp": true,
+    "son_single_depot": true,
+    "son_multi_vehicle": true
+  },
+  "archivos_generados": {
+    "subset_parquet": "svrpbench_subset.parquet",
+    "subset_sample_csv": "svrpbench_subset_sample.csv",
+    "selected_instances_csv": "selected_instances.csv",
+    "excluded_instances_csv": "excluded_instances.csv",
+    "config_json": "benchmark_subset_config.json",
+    "diagnostico_md": "svrpbench_subset_diagnostico_fase4.md"
+  },
+  "nota_ventanas": "Los subsets twvrp_* son la variante TWCVRP del dataset, pero el parquet crudo NO incluye los valores de ventana. Deben materializarse con el generador de la suite (semilla fija) antes de evaluar. No se inventan datos en esta fase."
+}

@@ -15,11 +15,85 @@ __pycache__/
 data/outputs/
 data/datasets/
 
-# Benchmark ALM RRC: datos pesados y cache (no versionar)
-data_benchmark/raw_json/
-data_benchmark/processed_csv/
-data_benchmark/processed_excel/
-data_benchmark/cache/
+# --- Benchmark ALM RRC (DEPRECADO): respaldo de datos pesados, NO versionar ---
+# El codigo deprecado bajo _deprecated_almrrc/ SI se versiona (es pequeno); solo
+# se ignoran las carpetas de datos pesados (el archivo de tiempos pesa ~9.5 GB).
+data_benchmark/_deprecated_almrrc/raw_json/
+data_benchmark/_deprecated_almrrc/processed_csv/
+data_benchmark/_deprecated_almrrc/processed_excel/
+data_benchmark/_deprecated_almrrc/cache/
+
+# --- Benchmark SVRPBench (ACTIVO): datos pesados NO versionar; scripts SI ---
+# Se versiona la estructura vacia (.gitkeep) pero se ignora el contenido pesado.
+data_benchmark/svrpbench/*
+!data_benchmark/svrpbench/.gitkeep
+data_benchmark/svrpbench_raw/*
+!data_benchmark/svrpbench_raw/.gitkeep
+!data_benchmark/svrpbench_raw/svrpbench_diagnostico_fase1.md
+data_benchmark/svrpbench_processed/*
+!data_benchmark/svrpbench_processed/.gitkeep
+# Entregables de protocolo/subconjunto (documentacion/config pequena) SI se versionan:
+!data_benchmark/svrpbench_processed/benchmark_protocol_config.json
+!data_benchmark/svrpbench_processed/svrpbench_protocolo_experimental_fase3.md
+!data_benchmark/svrpbench_processed/benchmark_subset_config.json
+!data_benchmark/svrpbench_processed/svrpbench_subset_diagnostico_fase4.md
+!data_benchmark/svrpbench_processed/selected_instances.csv
+!data_benchmark/svrpbench_processed/svrpbench_mapping_dss_fase5.md
+!data_benchmark/svrpbench_processed/svrpbench_adapter_diagnostico_fase5.md
+
+# Casos adaptados SVRPBench: datos regenerables por el adaptador. NO versionar.
+data_benchmark/svrpbench_cases/
+
+# --- Fase 6: ejecucion ---
+# Runners (codigo) SI se versionan (data_benchmark/svrpbench_runners/ no se ignora).
+# Entregables de config/diagnostico de ejecucion SI se versionan:
+!data_benchmark/svrpbench_processed/benchmark_execution_config.json
+!data_benchmark/svrpbench_processed/svrpbench_execution_preparation_diagnostico_fase6.md
+# Resultados y logs: datos generados, NO versionar (se mantiene estructura via .gitkeep).
+data_benchmark/svrpbench_results/*
+!data_benchmark/svrpbench_results/.gitkeep
+!data_benchmark/svrpbench_results/benchmark_results_schema.csv
+!data_benchmark/svrpbench_results/pilot/
+data_benchmark/svrpbench_results/pilot/*
+!data_benchmark/svrpbench_results/pilot/.gitkeep
+!data_benchmark/svrpbench_results/pilot/pilot_results.csv
+!data_benchmark/svrpbench_results/pilot/pilot_selected_instances.csv
+!data_benchmark/svrpbench_results/pilot/svrpbench_pilot_diagnostico_fase7.md
+!data_benchmark/svrpbench_results/final/
+data_benchmark/svrpbench_results/final/*
+!data_benchmark/svrpbench_results/final/.gitkeep
+# Fase 8: entregables ligeros (CSV agregados + documentacion) SI se versionan.
+!data_benchmark/svrpbench_results/final/final_results_detailed.csv
+!data_benchmark/svrpbench_results/final/final_results_by_model.csv
+!data_benchmark/svrpbench_results/final/final_results_by_size.csv
+!data_benchmark/svrpbench_results/final/final_results_by_model_size.csv
+!data_benchmark/svrpbench_results/final/final_results_by_instance.csv
+!data_benchmark/svrpbench_results/final/final_model_ranking.csv
+!data_benchmark/svrpbench_results/final/final_failed_runs.csv
+!data_benchmark/svrpbench_results/final/final_infeasible_runs.csv
+!data_benchmark/svrpbench_results/final/svrpbench_benchmark_final_resumen.md
+!data_benchmark/svrpbench_results/final/svrpbench_benchmark_final_diagnostico_fase8.md
+# El .xlsx (regenerable desde el CSV) y los JSON por instancia (pesados) NO se versionan.
+# --- Fase 8b: benchmark FIEL TWCVRP. Entregables ligeros (CSV + docs) SI se versionan. ---
+!data_benchmark/svrpbench_results/final_twcvrp/
+data_benchmark/svrpbench_results/final_twcvrp/*
+!data_benchmark/svrpbench_results/final_twcvrp/.gitkeep
+!data_benchmark/svrpbench_results/final_twcvrp/twcvrp_results_detailed.csv
+!data_benchmark/svrpbench_results/final_twcvrp/twcvrp_results_by_model.csv
+!data_benchmark/svrpbench_results/final_twcvrp/twcvrp_results_by_size.csv
+!data_benchmark/svrpbench_results/final_twcvrp/twcvrp_results_by_model_size.csv
+!data_benchmark/svrpbench_results/final_twcvrp/twcvrp_results_by_instance.csv
+!data_benchmark/svrpbench_results/final_twcvrp/twcvrp_model_ranking.csv
+!data_benchmark/svrpbench_results/final_twcvrp/twcvrp_failed_runs.csv
+!data_benchmark/svrpbench_results/final_twcvrp/twcvrp_dss_reparaciones.csv
+!data_benchmark/svrpbench_results/final_twcvrp/svrpbench_benchmark_twcvrp_resumen.md
+!data_benchmark/svrpbench_results/final_twcvrp/svrpbench_benchmark_twcvrp_diagnostico_fase8b.md
+data_benchmark/svrpbench_logs/*
+!data_benchmark/svrpbench_logs/.gitkeep
+# data_benchmark/svrpbench_scripts/  -> SI se versiona (codigo del benchmark).
+
+# Suite de evaluacion SVRPBench: clon de GitHub (repo git anidado, ~84 MB). NO versionar.
+data_benchmark/svrpbench_evaluation_suite/
 
 # IDE
 .vscode/

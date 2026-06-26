@@ -1,0 +1,82 @@
+{
+  "config_version": "fase6-1.0",
+  "fecha": "2026-06-25",
+  "descripcion": "Configuracion de ejecucion del benchmark SVRPBench. Define modelos, instancias, realizaciones, metricas, rutas de resultados/logs y criterios de fallo. Esta fase solo PREPARA; el runner no ejecuta de forma masiva sin --run.",
+
+  "rutas": {
+    "subset_parquet": "data_benchmark/svrpbench_processed/svrpbench_subset.parquet",
+    "selected_instances": "data_benchmark/svrpbench_processed/selected_instances.csv",
+    "results_pilot": "data_benchmark/svrpbench_results/pilot",
+    "results_final": "data_benchmark/svrpbench_results/final",
+    "logs": "data_benchmark/svrpbench_logs",
+    "results_schema": "data_benchmark/svrpbench_results/benchmark_results_schema.csv"
+  },
+
+  "instancias": {
+    "tamanos_incluidos": [50, 100, 200],
+    "total_disponibles": 30,
+    "regla": "todas las instancias del subconjunto (Fase 4) que cumplen el protocolo"
+  },
+
+  "realizaciones_estocasticas": {
+    "final": 5,
+    "pilot": 1,
+    "nota": "Las realizaciones se aplican via num_realizations de la suite; robustness (Fase 8) usa >=2."
+  },
+
+  "modelos": {
+    "obligatorios": [
+      {"id": "DSS", "wrapper": "run_dss_model.py", "estado": "disponible", "motor": "auto"},
+      {"id": "or-tools", "wrapper": "run_ortools_baseline.py", "estado": "por_verificar_en_runtime"}
+    ],
+    "viables": [
+      {"id": "nn2opt", "wrapper": "run_nn_2opt_baseline.py", "estado": "por_verificar_en_runtime"},
+      {"id": "tabu", "wrapper": "run_tabu_baseline.py", "estado": "por_verificar_en_runtime"}
+    ],
+    "opcionales": [
+      {"id": "aco", "wrapper": "run_aco_baseline.py", "estado": "por_verificar_en_runtime",
+       "advertencia": "runtime alto en tamanos grandes"}
+    ],
+    "no_recomendados": [
+      {"id": "pomo_attention_model", "motivo": "requieren rl4co+torch (~2 GB), GPU; no instalados"},
+      {"id": "lkh3", "motivo": "requiere binario externo"},
+      {"id": "alns", "motivo": "no existe en la suite"}
+    ]
+  },
+
+  "metricas": [
+    "total_cost", "total_distance", "total_time", "runtime_seconds",
+    "feasibility", "constraint_violation_rate", "time_window_violations",
+    "otd_benchmark", "vehicle_utilization", "demand_fulfillment"
+  ],
+  "metrica_robustness": {
+    "estado": "preparada_para_fase8",
+    "definicion": "desviacion estandar del total_cost entre realizaciones estocasticas"
+  },
+
+  "limites": {
+    "time_limit_seconds_por_instancia": 30,
+    "time_limit_dss_optimizador_seconds": 10
+  },
+
+  "criterios_fallo": {
+    "modelo_no_disponible": "registrar error_message, continuar con el resto",
+    "dependencia_faltante": "registrar y marcar modelo como no disponible",
+    "instancia_incompatible": "registrar error_message en la fila de resultado",
+    "ejecucion_excede_time_limit": "marcar run como fallido (timeout)",
+    "solucion_infactible": "NO se descarta; se reporta feasibility<1, cvr>0, tw_violations",
+    "metrica_no_calculable": "campo en null con error_message"
+  },
+
+  "ventanas_horarias": {
+    "estado": "abiertas_por_defecto",
+    "nota": "El subconjunto no trae valores de ventana (Fase 4/5). Por defecto se usan ventanas abiertas (otd=1.0, tw_violations=0). La materializacion real es prerequisito de la Fase 7/8."
+  },
+
+  "pilot": {
+    "descripcion": "Prueba piloto controlada (Fase 7). NO se ejecuta sin --run.",
+    "instancias": ["twvrp_50_single_depot__0", "twvrp_100_single_depot__0", "twvrp_200_single_depot__0"],
+    "modelos": ["DSS", "or-tools", "nn2opt"],
+    "realizaciones": 1
+  }
+}

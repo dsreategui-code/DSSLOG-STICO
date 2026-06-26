@@ -1,0 +1,10 @@
+model_name,instance_id,instance_size,run_id,total_cost,total_distance,total_time,runtime_seconds,feasibility,constraint_violation_rate,time_window_violations,otd_benchmark,vehicle_utilization,demand_fulfillment,robustness_inputs,error_message
+DSS,twvrp_50_single_depot__0,50,0,285.0879,285.0879,950.293,10.0129,1.0,0.0,0,1.0,0.1,1.0,[285.0879],
+OR-Tools,twvrp_50_single_depot__0,50,0,227.1066,227.1066,757.022,1.0501,1.0,29.167,14,0.7021,1.0,1.0,[227.1066],
+NN+2opt,twvrp_50_single_depot__0,50,0,261.7911,261.7911,872.637,0.0222,1.0,10.417,5,0.8936,1.0,1.0,[261.7911],
+DSS,twvrp_100_single_depot__0,100,0,553.712,553.712,1845.707,10.0189,1.0,0.0,0,1.0,0.04,1.0,[553.712],
+OR-Tools,twvrp_100_single_depot__0,100,0,302.4402,302.4402,1008.134,1.0647,1.0,45.918,45,0.5361,1.0,1.0,[302.4402],
+NN+2opt,twvrp_100_single_depot__0,100,0,319.3593,319.3593,1064.531,0.0356,1.0,22.449,22,0.7732,1.0,1.0,[319.3593],
+DSS,twvrp_200_single_depot__0,200,0,1075.8387,1075.8387,3586.129,10.0327,1.0,0.0,0,1.0,0.025,1.0,[1075.8387],
+OR-Tools,twvrp_200_single_depot__0,200,0,439.5456,439.5456,1465.152,1.2479,1.0,62.189,125,0.375,1.0,1.0,[439.5456],
+NN+2opt,twvrp_200_single_depot__0,200,0,517.3364,517.3364,1724.455,0.1436,1.0,60.199,121,0.395,1.0,1.0,[517.3364],

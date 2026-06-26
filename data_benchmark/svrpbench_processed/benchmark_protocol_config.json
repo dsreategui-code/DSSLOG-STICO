@@ -1,0 +1,121 @@
+{
+  "protocol_version": "fase3-1.0",
+  "fecha": "2026-06-25",
+  "descripcion": "Protocolo experimental para comparar el DSS de ultima milla contra baselines de SVRPBench bajo condiciones comparables (single-depot, multi-vehicle, ventanas horarias, incertidumbre). Esta config es la base que la Fase 4 usara para construir el subconjunto procesado. NO ejecuta nada por si misma.",
+
+  "dataset": {
+    "nombre": "SVRPBench",
+    "fuente_inspeccionada_fase1": "MBZUAI/svrp-bench (Hugging Face, parquet)",
+    "fuente_suite_fase2": "github.com/yehias21/vrp-benchmarks",
+    "fuente_instancias_pendiente_validar": "Yahias21/vrp_benchmark (.npz) o generador del repo",
+    "split": "test"
+  },
+
+  "subconjunto_experimental": {
+    "subsets_objetivo": [
+      "twvrp_50_single_depot",
+      "twvrp_100_single_depot",
+      "twvrp_200_single_depot"
+    ],
+    "filtros": {
+      "variante": "TWCVRP (subset_name comienza con 'twvrp_')",
+      "deposito": "single-depot ('single_depot' in subset_name)",
+      "vehiculos": "multi-vehicle (num_vehicles > 1)",
+      "tamanos_clientes": [50, 100, 200]
+    },
+    "validacion_filtros_fase3": {
+      "twvrp_50_single_depot":  {"instancias": 10, "num_vehicles_rango": [10, 16], "cap_len_igual_num_vehicles": true},
+      "twvrp_100_single_depot": {"instancias": 10, "num_vehicles_rango": [24, 34], "cap_len_igual_num_vehicles": true},
+      "twvrp_200_single_depot": {"instancias": 10, "num_vehicles_rango": [44, 56], "cap_len_igual_num_vehicles": true}
+    },
+    "seleccion_instancias": "TODAS las instancias disponibles que cumplen los criterios (10 por tamano).",
+    "total_instancias": 30,
+    "muestreo": "ninguno (se usa el universo completo del subconjunto -> sin sesgo de seleccion)"
+  },
+
+  "incertidumbre": {
+    "ventanas_horarias": {
+      "estado": "REQUIERE_MATERIALIZACION_EN_FASE4",
+      "mecanismo": "vrp_bench/time_windows_generator.sample_time_window (residencial/comercial)",
+      "nota": "Los subsets twvrp del parquet NO traen columna time_windows; se generan con la suite usando semilla fija."
+    },
+    "estocasticos": {
+      "estado": "DISPONIBLE_EN_SUITE",
+      "mecanismo": "vrp_bench/travel_time_generator (trafico por hora, retraso log-normal, accidentes Poisson)",
+      "realizaciones_por_instancia": 5,
+      "soporta_realizaciones": true,
+      "parametro_suite": "num_realizations / --realizations"
+    },
+    "semillas": {
+      "global_seed": 42,
+      "regla": "misma secuencia de semillas por instancia para DSS y baselines (mismas realizaciones)."
+    }
+  },
+
+  "modelos": {
+    "obligatorios": [
+      {"nombre": "DSS (sistema bajo prueba)", "rol": "sistema evaluado", "estado": "a_adaptar_en_fase4"},
+      {"nombre": "OR-Tools", "solver_id": "or-tools", "estado": "confirmado", "motivo": "mismo motor del DSS, comparacion directa"}
+    ],
+    "deseables": [
+      {"nombre": "NN+2opt", "solver_id": "nn2opt", "estado": "confirmado"},
+      {"nombre": "Tabu Search", "solver_id": "tabu", "estado": "confirmado"}
+    ],
+    "opcionales": [
+      {"nombre": "ACO", "solver_id": "aco", "estado": "confirmado", "advertencia": "runtime alto"}
+    ],
+    "no_recomendados": [
+      {"nombre": "Attention Model / POMO (RL)", "motivo": "requieren rl4co+torch (~2 GB), GPU; reproducibilidad fragil"},
+      {"nombre": "LKH-3", "motivo": "requiere binario externo"},
+      {"nombre": "ALNS", "motivo": "no existe en la suite"}
+    ]
+  },
+
+  "metricas": {
+    "principales": ["total_cost", "feasibility", "cvr", "time_window_violations", "otd_benchmark", "runtime", "robustness"],
+    "complementarias": ["total_distance", "waiting_time", "vehicle_utilization", "demand_fulfillment"],
+    "otd_benchmark": {
+      "definicion": "clientes atendidos dentro de su ventana / clientes totales",
+      "rango": "[0, 1]",
+      "calculo": "por realizacion, promediado por instancia; calculado por nuestro harness en Fase 4"
+    },
+    "robustness": {
+      "definicion": "variabilidad del total_cost entre las 5 realizaciones estocasticas",
+      "medida": "desviacion estandar (y/o varianza) del total_cost por instancia"
+    }
+  },
+
+  "reglas_comparabilidad": {
+    "mismas_instancias": true,
+    "mismas_ventanas": true,
+    "mismas_capacidades": true,
+    "mismas_demandas": true,
+    "mismas_realizaciones": true,
+    "mismas_semillas": true,
+    "mismas_metricas": true,
+    "mismo_mapeo_de_unidades": "definir en Fase 4 (coordenadas ~0-1000 y reloj de la suite vs jornada DSS)"
+  },
+
+  "manejo_infactibilidad": {
+    "marcar_instancia_infactible": true,
+    "reportar_violaciones": true,
+    "ocultar_resultados": false,
+    "ajuste_manual_para_favorecer_dss": false,
+    "regla": "una solucion que viola capacidad o ventana se reporta con feasibility<1, cvr>0 y, si aplica, time_window_violations>0; nunca se descarta ni se corrige a mano."
+  },
+
+  "salidas_fase4": {
+    "instancias_procesadas": "data_benchmark/svrpbench_processed/instances/twvrp_{size}_single_depot/*.json",
+    "ventanas_materializadas": "data_benchmark/svrpbench_processed/time_windows/seed42/*.json",
+    "resultados_por_modelo": "data_benchmark/svrpbench_results/{modelo}/{subset}_{instancia}_r{realizacion}.json",
+    "consolidado": "data_benchmark/svrpbench_results/benchmark_consolidado.csv",
+    "consolidado_xlsx": "data_benchmark/svrpbench_results/benchmark_consolidado.xlsx"
+  },
+
+  "restricciones_proceso": {
+    "no_modificar_dss": true,
+    "no_modificar_app_py": true,
+    "no_ejecutar_benchmark_en_fase3": true,
+    "no_instalar_dependencias_pesadas": true
+  }
+}
