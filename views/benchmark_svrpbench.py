@@ -1,8 +1,13 @@
 """Fase 9 - Vista de analisis del benchmark SVRPBench (TWCVRP fiel).
 
-Lee los resultados de `data_benchmark/svrpbench_results/final_twcvrp/` (generados por la
-Fase 8b) y los presenta de forma interpretada: perfil de rendimiento en TODOS los criterios
-(radar), tabla comparativa completa, detalle por criterio, ranking y conclusiones.
+Lee los resultados de `data_benchmark/svrpbench_results/final_twcvrp/` (Fase 8b) y los
+presenta de forma interpretada: perfil de rendimiento en todos los criterios (radar),
+tabla comparativa completa, comparacion por tamano de instancia (50/100/200), detalle por
+criterio, ranking y conclusiones.
+
+Argumento central (honesto): el DSS supera ampliamente a las heuristicas comunes y empata
+con el mejor OR-Tools TWCVRP. La robustez se muestra como un criterio mas, sin sobrevenderla
+(las diferencias absolutas entre modelos son pequenas).
 
 Solo LEE archivos del benchmark; no ejecuta solvers ni toca el flujo operativo del DSS.
 """
@@ -33,25 +38,23 @@ _RGB = {"DSS": "2,122,72", "or-tools-tw": "21,112,239",
         "nn2opt": "181,71,8", "or-tools": "152,162,179"}
 _DSS_ANTES_POR_TAMANO = {50: 14922.9, 100: 39294.1, 200: 95462.8}
 
-# Criterios para el radar: (etiqueta, columna, direccion 'up'=mas es mejor / 'down'=menos).
 _CRITERIOS_RADAR = [
     ("Costo bajo", "costo_prom", "down"),
-    ("Robustez", "robustness", "down"),
     ("OTD", "otd_benchmark", "up"),
     ("Bajo CVR", "constraint_violation_rate", "down"),
     ("Utilizacion", "vehicle_utilization", "up"),
     ("Velocidad", "runtime_seconds", "down"),
+    ("Robustez", "robustness", "down"),
 ]
-# Tabla completa: (etiqueta, columna, direccion, formateador).
 _CRITERIOS_TABLA = [
     ("Costo promedio (min)", "costo_prom", "down", lambda v: f"{v:,.0f}"),
-    ("Robustez (variabilidad)", "robustness", "down", lambda v: f"{v:.2f}"),
     ("OTD (%)", "otd_benchmark", "up", lambda v: f"{v * 100:.1f}"),
     ("CVR (%)", "constraint_violation_rate", "down", lambda v: f"{v:.2f}"),
     ("Violaciones de ventana (prom)", "time_window_violations", "down", lambda v: f"{v:.2f}"),
     ("Utilizacion de vehiculos (%)", "vehicle_utilization", "up", lambda v: f"{v * 100:.0f}"),
     ("Factibilidad (FR)", "feasibility", "up", lambda v: f"{v:.2f}"),
     ("Cobertura (%)", "demand_fulfillment", "up", lambda v: f"{v * 100:.0f}"),
+    ("Robustez (variabilidad, min)", "robustness", "down", lambda v: f"{v:.2f}"),
     ("Runtime (s)", "runtime_seconds", "down", lambda v: f"{v:.2f}"),
 ]
 
@@ -66,15 +69,19 @@ def _color(modelo: str) -> str:
     return _COLOR.get(modelo, "#667085")
 
 
+def _ahorro_vs_naive(df: pd.DataFrame) -> float:
+    """% de ahorro del DSS frente a la mejor heuristica ingenua (or-tools/nn2opt)."""
+    dss = float(df[df.model_name == "DSS"]["costo_prom"].iloc[0])
+    naive = float(df[df.model_name.isin(["or-tools", "nn2opt"])]["costo_prom"].min())
+    return (1 - dss / naive) * 100 if naive else 0.0
+
+
 def _score(serie: pd.Series, direccion: str):
-    """Normaliza a [0,1] donde 1 = mejor entre los modelos (min-max por criterio)."""
     s = serie.astype(float)
     lo, hi = float(s.min()), float(s.max())
     if hi - lo < 1e-12:
         return [1.0] * len(s)
-    if direccion == "up":
-        return ((s - lo) / (hi - lo)).tolist()
-    return ((hi - s) / (hi - lo)).tolist()
+    return ((s - lo) / (hi - lo)).tolist() if direccion == "up" else ((hi - s) / (hi - lo)).tolist()
 
 
 def _fig_radar(by_model: pd.DataFrame) -> go.Figure:
@@ -86,32 +93,28 @@ def _fig_radar(by_model: pd.DataFrame) -> go.Figure:
         fig.add_trace(go.Scatterpolar(
             r=r + [r[0]], theta=theta + [theta[0]], name=_NOMBRES.get(m, m),
             fill="toself", fillcolor=f"rgba({_RGB.get(m, '102,112,133')},0.10)",
-            line=dict(color=_color(m), width=2),
-        ))
+            line=dict(color=_color(m), width=2)))
     fig.update_layout(
         height=440, margin=dict(l=60, r=60, t=30, b=60), paper_bgcolor="#FFFFFF",
         font=dict(family="Inter, sans-serif", color=COLOR_PRIMARY, size=11.5),
-        polar=dict(
-            bgcolor="#FFFFFF",
-            radialaxis=dict(visible=True, range=[0, 1], showticklabels=False,
-                            gridcolor="#EAECF0", linecolor="#EAECF0"),
-            angularaxis=dict(gridcolor="#EAECF0", linecolor="#EAECF0",
-                             tickfont=dict(size=11.5)),
-        ),
-        legend=dict(orientation="h", y=-0.08, x=0, font=dict(size=11)),
-    )
+        polar=dict(bgcolor="#FFFFFF",
+                   radialaxis=dict(visible=True, range=[0, 1], showticklabels=False,
+                                   gridcolor="#EAECF0", linecolor="#EAECF0"),
+                   angularaxis=dict(gridcolor="#EAECF0", linecolor="#EAECF0",
+                                    tickfont=dict(size=11.5))),
+        legend=dict(orientation="h", y=-0.08, x=0, font=dict(size=11)))
     return fig
 
 
-def _tabla_completa(by_model: pd.DataFrame):
-    modelos = by_model["model_name"].tolist()
+def _tabla_completa(df_modelos: pd.DataFrame):
+    modelos = df_modelos["model_name"].tolist()
     cols = [_NOMBRES.get(m, m) for m in modelos]
     data, raw = {}, {}
     for label, key, direccion, fmt in _CRITERIOS_TABLA:
-        vals = by_model[key].astype(float).tolist()
+        vals = df_modelos[key].astype(float).tolist()
         data[label] = [fmt(v) for v in vals]
         raw[label] = (vals, direccion)
-    df = pd.DataFrame(data, index=cols).T  # filas = criterios, columnas = modelos
+    df = pd.DataFrame(data, index=cols).T
 
     def _hl(row):
         vals, direccion = raw[row.name]
@@ -121,13 +124,13 @@ def _tabla_completa(by_model: pd.DataFrame):
     return df.style.apply(_hl, axis=1)
 
 
-def _fig_costo_por_modelo(by_model: pd.DataFrame) -> go.Figure:
-    d = by_model.sort_values("costo_prom")
+def _fig_costo_modelos(df: pd.DataFrame, titulo: str) -> go.Figure:
+    d = df.sort_values("costo_prom")
     fig = go.Figure(go.Bar(
         x=[_NOMBRES.get(m, m) for m in d["model_name"]], y=d["costo_prom"],
         marker_color=[_color(m) for m in d["model_name"]],
         text=[f"{v:,.0f}" for v in d["costo_prom"]], textposition="outside"))
-    fig.update_layout(**_base_layout("Costo operativo promedio (menor es mejor)", height=330))
+    fig.update_layout(**_base_layout(titulo, height=330))
     fig.update_yaxes(title="costo (min)")
     return fig
 
@@ -153,6 +156,17 @@ def _fig_costo_por_tamano(by_ms: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def _fig_utilizacion(by_model: pd.DataFrame) -> go.Figure:
+    d = by_model.sort_values("vehicle_utilization", ascending=False)
+    fig = go.Figure(go.Bar(
+        x=[_NOMBRES.get(m, m) for m in d["model_name"]], y=(d["vehicle_utilization"] * 100),
+        marker_color=[_color(m) for m in d["model_name"]],
+        text=[f"{v * 100:.0f}%" for v in d["vehicle_utilization"]], textposition="outside"))
+    fig.update_layout(**_base_layout("Utilizacion de vehiculos (mayor es mejor)", height=330))
+    fig.update_yaxes(title="carga / capacidad (%)", range=[0, 105])
+    return fig
+
+
 def _fig_antes_despues(by_ms: pd.DataFrame) -> go.Figure:
     tamanos = sorted(by_ms["instance_size"].unique())
     ahora = [by_ms[(by_ms.model_name == "DSS") & (by_ms.instance_size == t)]["costo_prom"].iloc[0]
@@ -171,20 +185,9 @@ def _fig_antes_despues(by_ms: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def _fig_robustez(by_model: pd.DataFrame) -> go.Figure:
-    d = by_model.sort_values("robustness")
-    fig = go.Figure(go.Bar(
-        x=[_NOMBRES.get(m, m) for m in d["model_name"]], y=d["robustness"],
-        marker_color=[_color(m) for m in d["model_name"]],
-        text=[f"{v:.2f}" for v in d["robustness"]], textposition="outside"))
-    fig.update_layout(**_base_layout("Robustez: variabilidad del costo (menor es mejor)", height=330))
-    fig.update_yaxes(title="desv. estandar del costo")
-    return fig
-
-
 def render():
     render_view_title(
-        "Benchmark SVRPBench - rendimiento en todos los criterios",
+        "Benchmark SVRPBench - rendimiento del DSS por criterio",
         "Comparacion del DSS contra solvers de referencia sobre el benchmark academico "
         "SVRPBench (TWCVRP estocastico). Reconstruccion fiel al paper: capacidad real, "
         "ventanas por cliente y evaluador estocastico oficial. Mismo evaluador para todos.",
@@ -211,20 +214,20 @@ def render():
 
     dss = by_model[by_model["model_name"] == "DSS"].iloc[0]
     pos_dss = int(ranking[ranking["model_name"] == "DSS"]["rank"].iloc[0])
-    n_modelos = len(ranking)
+    ahorro = _ahorro_vs_naive(by_model)
 
     kpi_row([
-        {"label": "Posicion del DSS", "value": f"{pos_dss}o de {n_modelos}",
+        {"label": "Posicion del DSS", "value": f"{pos_dss}o de {len(ranking)}",
          "helptext": "Ranking por costo, factibilidad, CVR, OTD y runtime"},
         {"label": "Costo DSS", "value": f"{dss['costo_prom']:,.0f}",
          "helptext": "Tiempo operativo promedio bajo escenarios estocasticos (min)"},
+        {"label": "Ahorro vs heuristica", "value": f"-{ahorro:.0f}%",
+         "helptext": "Costo del DSS frente a la mejor heuristica ingenua (NN+2opt / OR-Tools cap.)"},
         {"label": "OTD DSS", "value": f"{dss['otd_benchmark'] * 100:.1f}%",
          "helptext": "Entregas dentro de ventana"},
-        {"label": "Robustez DSS", "value": f"{dss['robustness']:.2f}",
-         "helptext": "Variabilidad del costo entre escenarios (la mejor de todos)"},
     ])
 
-    # --- Perfil de rendimiento en TODOS los criterios (radar) ---
+    # --- Perfil en todos los criterios ---
     render_divider()
     st.markdown("#### Perfil de rendimiento en todos los criterios")
     col_r, col_t = st.columns([5, 6], gap="large")
@@ -232,28 +235,52 @@ def render():
         st.plotly_chart(_fig_radar(by_model), use_container_width=True,
                         config={"displayModeBar": False})
         st.caption(
-            "Cada eje normalizado 0-1 (borde = mejor entre los modelos). Muestra la posicion "
-            "relativa en cada criterio, no la magnitud absoluta; los valores reales en la tabla."
+            "Cada eje normalizado 0-1 (borde = mejor entre los modelos): muestra la posicion "
+            "RELATIVA, no la magnitud. Nota: en robustez las diferencias absolutas son muy "
+            "pequenas (fracciones de minuto); el diferenciador real es el costo."
         )
     with col_t:
         st.markdown("**Tabla comparativa completa** (verde = mejor por criterio)")
         st.dataframe(_tabla_completa(by_model), use_container_width=True)
+
+    # --- Comparacion por tamano de instancia ---
+    if by_ms is not None:
+        render_divider()
+        st.markdown("#### Comparacion por tamano de instancia")
+        st.caption("Cada modelo se evaluo en 10 instancias de cada tamano (50, 100 y 200 clientes).")
+        tabs = st.tabs(["50 clientes", "100 clientes", "200 clientes"])
+        for tab, size in zip(tabs, [50, 100, 200]):
+            with tab:
+                sub = by_ms[by_ms["instance_size"] == size]
+                if sub.empty:
+                    st.info("Sin datos para este tamano.")
+                    continue
+                ahorro_s = _ahorro_vs_naive(sub)
+                c_izq, c_der = st.columns([5, 6], gap="large")
+                with c_izq:
+                    st.plotly_chart(
+                        _fig_costo_modelos(sub, f"Costo a {size} clientes (menor es mejor)"),
+                        use_container_width=True, config={"displayModeBar": False})
+                    st.caption(f"A {size} clientes, el DSS es ~{ahorro_s:.0f}% mas barato que la "
+                               "mejor heuristica ingenua.")
+                with c_der:
+                    st.markdown(f"**Todos los indicadores a {size} clientes** (verde = mejor)")
+                    st.dataframe(_tabla_completa(sub), use_container_width=True)
 
     # --- Detalle por criterio ---
     render_divider()
     st.markdown("#### Detalle por criterio")
     c1, c2 = st.columns(2, gap="large")
     with c1:
-        st.plotly_chart(_fig_costo_por_modelo(by_model), use_container_width=True,
-                        config={"displayModeBar": False})
-        st.plotly_chart(_fig_robustez(by_model), use_container_width=True,
+        st.plotly_chart(_fig_costo_modelos(by_model, "Costo operativo promedio (menor es mejor)"),
+                        use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(_fig_utilizacion(by_model), use_container_width=True,
                         config={"displayModeBar": False})
     with c2:
-        if by_ms is not None:
-            st.plotly_chart(_fig_costo_por_tamano(by_ms), use_container_width=True,
-                            config={"displayModeBar": False})
-            st.plotly_chart(_fig_antes_despues(by_ms), use_container_width=True,
-                            config={"displayModeBar": False})
+        st.plotly_chart(_fig_costo_por_tamano(by_ms), use_container_width=True,
+                        config={"displayModeBar": False})
+        st.plotly_chart(_fig_antes_despues(by_ms), use_container_width=True,
+                        config={"displayModeBar": False})
 
     # --- Ranking ---
     render_divider()
@@ -270,17 +297,18 @@ def render():
     col_a, col_b, col_c = st.columns(3, gap="medium")
     with col_a:
         info_card(
-            "Hallazgo principal",
-            "El DSS queda empatado con el mejor OR-Tools TWCVRP y supera ~31-40% en costo a "
-            "las heuristicas ingenuas. Es el unico modelo en la esquina 'barato y estable'.",
+            "Argumento central",
+            f"El DSS es ~{ahorro:.0f}% mas barato que las heuristicas comunes (NN+2opt, "
+            "OR-Tools solo capacidad), con igual servicio (OTD ~99%) y casi el doble de "
+            "utilizacion de flota. Esa es la ventaja real y de gran magnitud.",
             eyebrow="Conclusion",
         )
     with col_b:
         info_card(
-            "Por que destaca",
-            "Tiene la MEJOR robustez (menor variabilidad del costo entre escenarios), que es "
-            "justo el objetivo del DSS: reducir la variabilidad de los tiempos de entrega.",
-            eyebrow="Robustez",
+            "Al nivel del estado del arte",
+            "Empata (~1%) con un OR-Tools TWCVRP construido a proposito para este problema. "
+            "El DSS no es un sistema improvisado: compite con la mejor herramienta disponible.",
+            eyebrow="Comparacion",
         )
     with col_c:
         n_rep = int(rep["n_reparadas_dedicadas"].sum()) if rep is not None else 0

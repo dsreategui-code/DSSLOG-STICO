@@ -14,9 +14,11 @@ Fecha: 2026-06-26 · Interpretador: `.venv` (OR-Tools + suite `vrp_bench`) · 60
 
 Con un benchmark TWCVRP **fiel** y el DSS **mejorado**, el DSS pasa de 3.º (perdedor) a
 **2.º, empatado con el mejor OR-Tools TWCVRP posible** (28489 vs 28145, +1.2 %) y **31–40 %
-más barato que las heurísticas ingenuas** (43064). El DSS tiene además la **mejor robustez**
-(0.31) y ~99 % de entregas a tiempo. La "victoria" del DSS en la Fase 8 era artefacto; ahora
-su competitividad es **real y verificada** contra un rival que respeta ventanas.
+más barato que las heurísticas ingenuas** (43064), con ~99 % de entregas a tiempo y casi el
+doble de utilización de flota. La "victoria" del DSS en la Fase 8 era artefacto; ahora su
+competitividad es **real y verificada** contra un rival que respeta ventanas. (Nota: la
+robustez de costo es similar entre todos los modelos —diferencias de fracciones de minuto—,
+así que **no** es un argumento diferenciador; ver §4.)
 
 ---
 
@@ -72,16 +74,17 @@ y flota holgada e igual para todos.
 
 ### Agregado por modelo
 
-| Modelo | Costo prom. | Robustez | Runtime (s) | Feasib. (FR) | CVR (%) | OTD | Util. veh. |
+| Modelo | Costo prom. | Util. veh. | OTD | CVR (%) | Feasib. (FR) | Runtime (s) | Robustez |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| **or-tools-tw** | **28145** | 0.73 | 12.0 | 0.37 | 1.19 | 0.988 | 0.86 |
-| **DSS** | **28489** | **0.31** | 12.0 | 0.37 | 1.13 | 0.989 | 0.85 |
-| nn2opt | 43064 | 0.79 | 0.06 | 0.40 | 0.95 | 0.991 | 0.55 |
-| or-tools (solo cap.) | 43066 | 0.79 | 0.19 | 0.40 | 0.95 | 0.991 | 0.55 |
+| **or-tools-tw** | **28145** | 0.86 | 0.988 | 1.19 | 0.37 | 12.0 | 0.73 |
+| **DSS** | **28489** | 0.85 | 0.989 | 1.13 | 0.37 | 12.0 | 0.31 |
+| nn2opt | 43064 | 0.55 | 0.991 | 0.95 | 0.40 | 0.06 | 0.79 |
+| or-tools (solo cap.) | 43066 | 0.55 | 0.991 | 0.95 | 0.40 | 0.19 | 0.79 |
 
 Ranking: **1.º or-tools-tw, 2.º DSS, 3.º nn2opt, 4.º or-tools**. El DSS y or-tools-tw
-(ambos TWCVRP reales) dejan a las heurísticas ingenuas ~50 % atrás en costo. El DSS tiene la
-**mejor robustez** (0.31) y la mayor utilización de flota tras or-tools-tw.
+(ambos TWCVRP reales) dejan a las heurísticas ingenuas ~50 % atrás en costo y usan la flota
+al ~85 % (vs ~55 %). La columna de robustez se incluye por completitud, pero las diferencias
+absolutas son fracciones de minuto sobre costos de decenas de miles: **no** discrimina (§4).
 
 ### DSS vs el rival fuerte (or-tools-tw) y vs heurísticas ingenuas
 
@@ -99,10 +102,17 @@ sumo 1.7 % por detrás a 200. OTD ~0.98-0.99 y CVR < 2.3 % en todos.
 ## 4. Interpretación honesta
 
 - **El DSS es competitivo de verdad.** Tras desacoplar la espera, iguala a un OR-Tools
-  TWCVRP de referencia y supera a las heurísticas ingenuas por ~31-40 % en costo, con la
-  mejor robustez. A 50-100 clientes (última milla real) está estadísticamente empatado.
+  TWCVRP de referencia y supera a las heurísticas ingenuas por ~31-40 % en costo, con igual
+  servicio (OTD ~99 %) y casi el doble de utilización de flota. A 50-100 clientes (última
+  milla real) está estadísticamente empatado. Ese es el argumento central.
 - **El pequeño margen a favor de or-tools-tw (1.2 %)** viene de que el DSS balancea carga
-  (su diseño) y `or-tools-tw` minimiza costo puro; el DSS lo compensa con mejor robustez.
+  (su diseño) y `or-tools-tw` minimiza costo puro.
+- **La robustez NO es un diferenciador en este benchmark.** A nivel de costo agregado todos
+  los modelos son casi deterministas: la variabilidad entre las 5 realizaciones es de ~0.2-0.8
+  min sobre costos de 28000-43000 (los retrasos por arco se promedian sobre cientos de arcos
+  y los accidentes son raros). El DSS tiene el menor número, pero la diferencia carece de peso
+  práctico. La variabilidad relevante para la tesis (tiempos de entrega / OTD por pedido a lo
+  largo de la jornada) debe medirse en la **simulación operativa del DSS**, no aquí.
 - **La mejora clave fue una corrección, no un truco.** Permitir esperar en ventana es
   comportamiento CVRPTW estándar que también beneficia a producción; no cambia el objetivo
   ni favorece selectivamente al DSS en la puntuación (todos se miden igual).
