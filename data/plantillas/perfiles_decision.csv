@@ -1,0 +1,6 @@
+perfil,w_tiempo,w_tardanza,w_riesgo,w_balance,w_estabilidad
+eficiente,1.0,0.4,0.3,0.0,0.0
+puntual,0.5,1.0,0.7,0.0,0.0
+robusta,0.5,0.8,1.0,0.2,0.3
+balanceada,0.7,0.7,0.6,0.3,0.2
+estable,0.5,0.6,0.6,0.3,1.0

@@ -1,0 +1,17 @@
+distrito,macrozona,factor_acceso,factor_estacionamiento,factor_seguridad,tipo_zona,observacion
+Callao,Oeste,1.00,1.00,1.05,industrial,Salida del hub
+Bellavista,Oeste,1.05,1.05,1.05,mixta,
+Miraflores,CentroSur,1.20,1.25,1.00,comercial,Alta densidad comercial
+San Isidro,CentroSur,1.15,1.20,1.00,comercial,Distrito financiero
+Santiago de Surco,CentroSur,1.10,1.10,1.00,residencial,
+Barranco,CentroSur,1.10,1.15,1.00,comercial,Calles estrechas
+La Molina,Este,1.15,1.05,1.00,residencial,Acceso por avenidas principales
+Ate,Este,1.25,1.00,1.20,industrial,Congestion industrial
+San Juan de Lurigancho,Este,1.30,1.00,1.35,mixta,Congestion y seguridad
+Los Olivos,Norte,1.20,1.05,1.15,mixta,
+San Martin de Porres,Norte,1.25,1.00,1.20,mixta,
+Comas,Norte,1.25,1.00,1.25,mixta,
+Villa El Salvador,Sur,1.20,1.00,1.20,mixta,
+Villa Maria del Triunfo,Sur,1.25,1.00,1.25,mixta,
+Cercado de Lima,Centro,1.35,1.30,1.15,comercial,Centro historico congestionado
+La Victoria,Centro,1.30,1.15,1.25,comercial,Comercio denso

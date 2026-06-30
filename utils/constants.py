@@ -30,6 +30,8 @@ VISTA_DRIVER = "driver_view"
 VISTA_BENCHMARK = "benchmark"
 # Gemelo digital operativo (CORTEX-LM, PyDeck).
 VISTA_DIGITAL_TWIN = "digital_twin"
+# Planificacion CORTEX-LM (pipeline completo).
+VISTA_PLANNING = "planning"
 
 # Zonas operativas
 ZONAS_OPERATIVAS = [

@@ -1,0 +1,5 @@
+macrozona,franja,hora_inicio,hora_fin,factor_trafico
+,manana,07:00,10:00,1.45
+,mediodia,10:00,16:00,1.10
+,tarde,16:00,20:00,1.50
+,noche,20:00,23:59,1.00

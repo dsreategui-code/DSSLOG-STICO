@@ -1,0 +1,6 @@
+fecha,tipo_evento,descripcion,factor_trafico,factor_demanda,zonas_afectadas
+2026-12-24,navidad,Vispera de Navidad - alta demanda y congestion,1.40,1.50,todas
+2026-12-31,fin_de_ano,Fin de ano,1.35,1.30,todas
+2026-07-28,fiestas_patrias,Feriado patrio,1.20,0.80,todas
+2026-06-30,cierre_mes,Cierre de mes comercial,1.15,1.20,
+2026-05-10,campana_comercial,Campana comercial - mayor demanda,1.10,1.35,CentroSur

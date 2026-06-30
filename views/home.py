@@ -5,6 +5,7 @@ from components.cards import info_card, feature_card
 from utils.constants import (
     MODO_VALIDACION, MODO_DEMOSTRACION,
     VISTA_VALIDATION_DATA, VISTA_DEMO_ROLE_SELECTION, VISTA_BENCHMARK, VISTA_DIGITAL_TWIN,
+    VISTA_PLANNING,
 )
 
 
@@ -97,20 +98,38 @@ def render():
         st.rerun()
 
     st.write("")
-    feature_card(
-        eyebrow="04  /  Gemelo Digital Operativo",
-        title="CORTEX-LM (vista previa)",
-        description=(
-            "Reconstruccion simulada de la jornada en mapa PyDeck: rutas, vehiculos en "
-            "movimiento por ticks, estado de pedidos, incidencias y replanificacion "
-            "intra-vehiculo con recomendacion explicable. Gemelo operativo simulado."
-        ),
-    )
-    if st.button("Abrir gemelo digital", key="home_twin",
-                 type="secondary", use_container_width=True):
-        st.session_state.modo = None
-        st.session_state.rol = None
-        st.session_state.vista = VISTA_DIGITAL_TWIN
-        st.rerun()
+    cor1, cor2 = st.columns(2, gap="large")
+    with cor1:
+        feature_card(
+            eyebrow="04  /  Planificacion CORTEX-LM",
+            title="Motor de decision",
+            description=(
+                "Genera rutas candidatas por perfil de decision, las evalua por simulacion "
+                "estocastica (OTD, IRI, riesgo) y recomienda una de forma explicable. Matriz "
+                "contextual de Lima sobre OSRM. Envia el resultado al gemelo digital."
+            ),
+        )
+        if st.button("Abrir planificacion", key="home_plan",
+                     type="secondary", use_container_width=True):
+            st.session_state.modo = None
+            st.session_state.rol = None
+            st.session_state.vista = VISTA_PLANNING
+            st.rerun()
+    with cor2:
+        feature_card(
+            eyebrow="05  /  Gemelo Digital Operativo",
+            title="Vista PyDeck",
+            description=(
+                "Reconstruccion simulada de la jornada en mapa PyDeck: rutas, vehiculos en "
+                "movimiento por ticks, estado de pedidos, incidencias y replanificacion "
+                "intra-vehiculo. Gemelo operativo simulado."
+            ),
+        )
+        if st.button("Abrir gemelo digital", key="home_twin",
+                     type="secondary", use_container_width=True):
+            st.session_state.modo = None
+            st.session_state.rol = None
+            st.session_state.vista = VISTA_DIGITAL_TWIN
+            st.rerun()
 
     render_footer()

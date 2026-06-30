@@ -1,0 +1,144 @@
+"""Pipeline de planificacion del DSS CORTEX-LM.
+
+Orquesta el flujo completo de planificacion inicial uniendo todos los modulos del motor:
+
+  contexto -> factibilidad -> matriz base (OSRM/cache/respaldo) -> matriz contextual ->
+  rutas candidatas (perfiles) -> simulacion estocastica + riesgo (IRI) -> recomendacion
+  explicable -> escenario para el gemelo digital.
+
+Trabaja con heuristicas, metaheuristicas y simulacion: produce soluciones de buena calidad
+y una recomendacion, NO optimos garantizados. La matriz base usa OSRM local; si no esta
+disponible ni hay cache, usa una matriz de respaldo (haversine) claramente marcada.
+"""
+from __future__ import annotations
+
+import math
+from typing import Optional
+
+import numpy as np
+
+from config.cortex_settings import VELOCIDAD_RESPALDO_KMH
+from core.candidate_generator import generar_candidatas, preparar_modelo
+from core.contextual_matrix import construir_matriz_contextual, construir_nodos
+from core.feasibility import verificar
+from core.recommender import evaluar_candidatas, recomendar
+from utils.formatters import hhmm_to_minutes
+
+T_INICIO_DEFECTO = 9 * 60
+
+
+def _haversine_km(a, b) -> float:
+    (la1, lo1), (la2, lo2) = a, b
+    R = 6371.0
+    p1, p2 = math.radians(la1), math.radians(la2)
+    dphi = math.radians(la2 - la1)
+    dl = math.radians(lo2 - lo1)
+    h = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(h))
+
+
+def _matrices_haversine(coords, velocidad_kmh: float):
+    n = len(coords)
+    t = np.zeros((n, n)); d = np.zeros((n, n))
+    for i in range(n):
+        for j in range(n):
+            if i != j:
+                km = _haversine_km(coords[i], coords[j])
+                d[i][j] = km
+                t[i][j] = km / max(velocidad_kmh, 1.0) * 60.0
+    return t, d
+
+
+def matriz_base_tiempos(hub, pedidos, params, osrm=None) -> dict:
+    """Matriz base de tiempos (min) y distancias (km). OSRM -> cache -> respaldo haversine."""
+    coords = [hub.coord] + [p.coord for p in pedidos]
+    if params.usar_osrm and osrm is not None:
+        try:
+            m = osrm.matriz_base(coords, usar_cache=params.usar_cache_osrm)
+            return {"tiempo_min": m["duracion_min"], "dist_km": m["distancia_km"],
+                    "origen": m["origen"]}
+        except Exception:  # noqa: BLE001  (OSRM no disponible y sin cache: respaldo)
+            pass
+    t, d = _matrices_haversine(coords, VELOCIDAD_RESPALDO_KMH)
+    return {"tiempo_min": t, "dist_km": d, "origen": "haversine_respaldo"}
+
+
+def _escenario_desde_evaluacion(contexto, pedidos, modelo, evaluacion) -> dict:
+    """Construye el escenario del gemelo digital desde la candidata recomendada."""
+    hub = contexto["hub"]
+    iri_map = {}
+    if evaluacion is not None and evaluacion.get("iri") is not None:
+        iri_map = dict(zip(evaluacion["iri"]["pedido_id"], evaluacion["iri"]["iri"]))
+    res = evaluacion["resultado"] if evaluacion else {"rutas": {}}
+    rutas = {}
+    geometrias = {}
+    for veh, rc in res.get("rutas", {}).items():
+        paradas = []
+        for s in rc.secuencia:
+            idx = s.idx_nodo
+            p = pedidos[idx - 1]
+            paradas.append({
+                "pedido_id": p.pedido_id, "coord": (p.lat, p.lon),
+                "eta_min": round(T_INICIO_DEFECTO + s.eta_min, 1),
+                "servicio_min": float(modelo.servicio_min[idx]),
+                "tardanza_min": round(s.tardanza_min, 1),
+                "iri": float(iri_map.get(p.pedido_id, 0.0)),
+                "ventana_fin_min": hhmm_to_minutes(p.ventana_fin),
+                "distrito": p.distrito})
+        if paradas:
+            rutas[veh] = paradas
+            geometrias[veh] = ([[hub.lon, hub.lat]]
+                               + [[pp["coord"][1], pp["coord"][0]] for pp in paradas])
+    return {"hub": {"nombre": hub.nombre, "lat": hub.lat, "lon": hub.lon},
+            "rutas": rutas, "geometrias": geometrias,
+            "t_inicio_min": float(T_INICIO_DEFECTO), "jornada_fin_min": 19 * 60,
+            "vehiculos": list(rutas.keys()), "n_pedidos": sum(len(v) for v in rutas.values())}
+
+
+def planificar(contexto: dict, *, fecha: Optional[str] = None, osrm=None,
+               max_pedidos: Optional[int] = None, hora_ref: str = "09:00") -> dict:
+    """Ejecuta el pipeline completo. Devuelve factibilidad, matriz, candidatas, recomendacion
+    y el escenario para el gemelo digital."""
+    hub = contexto["hub"]
+    pedidos = contexto["pedidos"][:max_pedidos] if max_pedidos else contexto["pedidos"]
+    vehiculos = contexto["vehiculos"]
+    params = contexto["parametros"]
+
+    sub_ctx = {**contexto, "pedidos": pedidos}
+    osrm_disp = False
+    try:
+        osrm_disp = bool(osrm and params.usar_osrm and osrm.disponible())
+    except Exception:  # noqa: BLE001
+        osrm_disp = False
+    feas = verificar(sub_ctx, osrm_disponible=osrm_disp, cache_disponible=False)
+    if not feas["factible"]:
+        return {"factible": False, "factibilidad": feas, "recomendacion": None,
+                "candidatas": [], "escenario": None}
+
+    base = matriz_base_tiempos(hub, pedidos, params, osrm)
+    nodos = construir_nodos(hub, pedidos)
+    ctx_mat = construir_matriz_contextual(
+        base["tiempo_min"], nodos, contexto["zonas"], contexto["trafico"],
+        eventos=contexto["eventos"], fecha=fecha, hora_ref=hora_ref)
+
+    modelo = preparar_modelo(hub, pedidos, vehiculos, ctx_mat["matriz"], base["dist_km"],
+                             tiempos_servicio=contexto.get("tiempos_servicio"),
+                             jornada_inicio=hub.hora_apertura, jornada_fin=hub.hora_cierre)
+
+    candidatas = generar_candidatas(modelo, contexto["perfiles"], params)
+    evaluaciones = evaluar_candidatas(candidatas, modelo, params)
+    reco = recomendar(evaluaciones)
+
+    elegida = next((e for e in evaluaciones if e["perfil"] == reco["recomendada"]),
+                   evaluaciones[0] if evaluaciones else None)
+    escenario = _escenario_desde_evaluacion(contexto, pedidos, modelo, elegida)
+
+    return {
+        "factible": True, "factibilidad": feas,
+        "matriz_origen": base["origen"], "factores_contextuales": ctx_mat["factores"],
+        "candidatas": [c["kpis"] for c in candidatas],
+        "evaluaciones": evaluaciones, "recomendacion": reco,
+        "perfil_recomendado": reco["recomendada"],
+        "iri_recomendada": elegida["iri"] if elegida else None,
+        "escenario": escenario, "n_pedidos": len(pedidos),
+    }

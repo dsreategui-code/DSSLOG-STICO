@@ -1,0 +1,14 @@
+parametro,valor
+iteraciones_montecarlo,100
+semilla_base,42
+tiempo_solver_seg,10
+espera_max_min,0
+jornada_max_min,600
+penalizacion_tardanza,1.0
+penalizacion_riesgo,1.0
+umbral_retraso_replanificar,20
+umbral_riesgo_critico,0.81
+max_replanificaciones,3
+usar_osrm,1
+usar_cache_osrm,1
+velocidad_simulacion_demo,1.0
