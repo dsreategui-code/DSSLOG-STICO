@@ -14,6 +14,8 @@ __pycache__/
 # Datos generados localmente
 data/outputs/
 data/datasets/
+# Cache regenerable del motor CORTEX-LM (matrices OSRM, geometrias)
+data/cache/
 
 # --- Benchmark ALM RRC (DEPRECADO): respaldo de datos pesados, NO versionar ---
 # El codigo deprecado bajo _deprecated_almrrc/ SI se versiona (es pequeno); solo
