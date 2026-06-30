@@ -14,7 +14,28 @@ from components.layout import render_divider, render_footer, render_view_title
 from core.metrics import kpis_recomendada, tabla_candidatas, tabla_iri
 from core.planner import planificar
 from services.cortex_loader import cargar_contexto
+from services.data_loader import dataset_exists, generar_dataset_demo
 from utils.constants import VISTA_DIGITAL_TWIN, VISTA_HOME
+
+
+def _guard_dataset() -> bool:
+    """Si el dataset demo no existe (despliegue limpio), ofrece generarlo. True si falta."""
+    if dataset_exists():
+        return False
+    st.warning("El dataset demo aun no existe en este entorno. Generalo para continuar.")
+    if st.button("Generar dataset demo", type="primary", key="plan_gen_ds"):
+        with st.spinner("Generando dataset demo..."):
+            ok = generar_dataset_demo()
+        if ok:
+            st.rerun()
+        else:
+            st.error("No se pudo generar el dataset (revisa generar_dataset_sintetico.py).")
+    render_divider()
+    if st.button("Volver al inicio", key="plan_nodata_back"):
+        st.session_state.vista = VISTA_HOME
+        st.rerun()
+    render_footer()
+    return True
 
 _COLOR_CLASIF = {"Bajo": "#027A48", "Moderado": "#B54708", "Alto": "#B42318",
                  "Critico": "#7A271A"}
@@ -47,6 +68,8 @@ def render():
         "OSRM local (o respaldo si no esta disponible); el contexto urbano ajusta los tiempos.",
         eyebrow="CORTEX-LM  /  Planificacion",
     )
+    if _guard_dataset():
+        return
     ctx = _contexto()
     if ctx["avisos"]:
         st.warning("Avisos de carga: " + " ".join(ctx["avisos"]))

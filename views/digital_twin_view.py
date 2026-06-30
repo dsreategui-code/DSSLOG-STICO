@@ -16,6 +16,7 @@ from core.demo_scenario import construir_escenario_demo, replan_vehiculo_demo
 from core.telemetry import construir_telemetria, estado_pedidos_en_tick
 from geo.pydeck_layers import (capa_etiquetas_vehiculos, capa_hub, capa_pedidos,
                                capa_rutas, capa_vehiculos, construir_deck)
+from services.data_loader import dataset_exists, generar_dataset_demo
 from utils.constants import VISTA_HOME
 
 VELOCIDADES = {"0.5x": 1.2, "1x": 0.6, "2x": 0.3, "4x": 0.12}
@@ -78,6 +79,24 @@ def render():
         eyebrow="CORTEX-LM  /  Demostracion",
     )
     _init()
+    # El escenario puede venir de Planificacion (session_state) o construirse del dataset
+    # demo. Si no hay ninguno y el dataset no existe (despliegue limpio), ofrecer generarlo.
+    if st.session_state.dt_escenario is None and not dataset_exists():
+        st.warning("El dataset demo aun no existe en este entorno. Genéralo o usa "
+                   "'Planificacion' para enviar un escenario al gemelo.")
+        if st.button("Generar dataset demo", type="primary", key="dt_gen_ds"):
+            with st.spinner("Generando dataset demo..."):
+                ok = generar_dataset_demo()
+            if ok:
+                st.rerun()
+            else:
+                st.error("No se pudo generar el dataset.")
+        render_divider()
+        if st.button("Volver al inicio", key="dt_nodata_back"):
+            st.session_state.vista = VISTA_HOME
+            st.rerun()
+        render_footer()
+        return
     esc = _escenario()
     paso = float(st.session_state.dt_paso)
     tele = construir_telemetria(esc, paso_tick_min=paso)

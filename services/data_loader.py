@@ -1,8 +1,10 @@
 """Carga del dataset sintetico desde disco."""
 from pathlib import Path
 import json
+import subprocess
+import sys
 import pandas as pd
-from config.settings import DEMO_DATASET_DIR
+from config.settings import DEMO_DATASET_DIR, PROJECT_ROOT
 from utils.constants import DATASET_FILES
 
 
@@ -11,6 +13,20 @@ def dataset_exists(path: Path = None) -> bool:
     if not path.exists():
         return False
     return all((path / f).exists() for f in DATASET_FILES)
+
+
+def generar_dataset_demo() -> bool:
+    """Genera el dataset demo ejecutando el script de la raiz. Util en despliegues (Streamlit
+    Cloud) donde el dataset no esta versionado. Devuelve True si quedo disponible."""
+    script = PROJECT_ROOT / "generar_dataset_sintetico.py"
+    if not script.exists():
+        return False
+    try:
+        subprocess.run([sys.executable, str(script)], check=True, cwd=str(PROJECT_ROOT),
+                       capture_output=True, timeout=300)
+    except Exception:  # noqa: BLE001
+        return False
+    return dataset_exists()
 
 
 def load_dataset(path: Path = None) -> dict:
