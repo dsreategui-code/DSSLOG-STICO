@@ -28,6 +28,8 @@ VISTA_SUPERVISOR_EXPORT = "supervisor_export"
 VISTA_DRIVER = "driver_view"
 # Reservado para el futuro modo benchmark (SVRPBench). Sin ruta activa por ahora.
 VISTA_BENCHMARK = "benchmark"
+# Gemelo digital operativo (CORTEX-LM, PyDeck).
+VISTA_DIGITAL_TWIN = "digital_twin"
 
 # Zonas operativas
 ZONAS_OPERATIVAS = [

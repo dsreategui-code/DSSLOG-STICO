@@ -4,7 +4,7 @@ from components.layout import render_view_title, render_divider, render_footer
 from components.cards import info_card, feature_card
 from utils.constants import (
     MODO_VALIDACION, MODO_DEMOSTRACION,
-    VISTA_VALIDATION_DATA, VISTA_DEMO_ROLE_SELECTION, VISTA_BENCHMARK,
+    VISTA_VALIDATION_DATA, VISTA_DEMO_ROLE_SELECTION, VISTA_BENCHMARK, VISTA_DIGITAL_TWIN,
 )
 
 
@@ -94,6 +94,23 @@ def render():
         st.session_state.modo = None
         st.session_state.rol = None
         st.session_state.vista = VISTA_BENCHMARK
+        st.rerun()
+
+    st.write("")
+    feature_card(
+        eyebrow="04  /  Gemelo Digital Operativo",
+        title="CORTEX-LM (vista previa)",
+        description=(
+            "Reconstruccion simulada de la jornada en mapa PyDeck: rutas, vehiculos en "
+            "movimiento por ticks, estado de pedidos, incidencias y replanificacion "
+            "intra-vehiculo con recomendacion explicable. Gemelo operativo simulado."
+        ),
+    )
+    if st.button("Abrir gemelo digital", key="home_twin",
+                 type="secondary", use_container_width=True):
+        st.session_state.modo = None
+        st.session_state.rol = None
+        st.session_state.vista = VISTA_DIGITAL_TWIN
         st.rerun()
 
     render_footer()
