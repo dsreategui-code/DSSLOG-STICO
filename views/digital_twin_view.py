@@ -154,16 +154,21 @@ def render():
     # Inyeccion de incidencias aleatorias (reproducible con la semilla)
     esc_sin, incidencias = simular_incidencias(esc_base, tasa=intensidad / 100.0,
                                                seed=int(semilla))
-    # Propuestas de re-ruteo (NO se aplican solas: las decide el usuario abajo)
+    # Propuestas de re-ruteo (NO se aplican solas: las decide el usuario)
     propuestas = proponer_reruteo(esc_sin)
     sig = f"{int(semilla)}:{int(intensidad)}"
     if st.session_state.get("dt_sig") != sig:
         st.session_state.dt_sig = sig
         st.session_state.dt_dec = {}          # reset de decisiones si cambia la jornada
     dec = st.session_state.setdefault("dt_dec", {})
-    aprobadas = [p["vehiculo_id"] for p in propuestas
-                 if dec.get(p["vehiculo_id"]) == "aprobada"]
-    esc = aplicar_propuestas(esc_sin, propuestas, aprobadas)
+    # En el mapa fluido la decision es interactiva DENTRO de la animacion (por vehiculo);
+    # el escenario base alimenta los dashboards. En clasico, se decide con tarjetas server-side.
+    if modo_clasico:
+        aprobadas = [p["vehiculo_id"] for p in propuestas
+                     if dec.get(p["vehiculo_id"]) == "aprobada"]
+        esc = aplicar_propuestas(esc_sin, propuestas, aprobadas)
+    else:
+        aprobadas, esc = [], esc_sin
 
     tick, max_tick = 0, 0
     if modo_clasico:
@@ -194,43 +199,75 @@ def render():
     else:
         components.html(html_gemelo(esc, altura=540), height=760, scrolling=False)
 
-    st.caption("Gemelo operativo **SIMULADO**. Los trazos son rectos porque sin OSRM se usa "
-               "la distancia base (haversine); al activar **OSRM local** las rutas siguen las "
-               "calles reales. Las incidencias surgen de forma aleatoria segun la intensidad.")
-
-    # --- KPIs de la jornada (segun decisiones actuales del usuario) ---
-    r = resumen_operacion(esc, incidencias)
-    r_sin = resumen_operacion(esc_sin, incidencias)
-    pendientes = [p for p in propuestas if dec.get(p["vehiculo_id"]) is None]
-    delta_otd = (r["otd"] - r_sin["otd"]) * 100
-    if pendientes:
-        st.warning(f"⚠ **{r['alertas']} alertas** activas · **{len(pendientes)} propuesta(s) "
-                   f"de re-ruteo** esperan tu decision mas abajo.")
-    elif propuestas:
-        st.success(f"Decisiones aplicadas: OTD {r_sin['otd']*100:.1f}% → "
-                   f"**{r['otd']*100:.1f}%** ({len(aprobadas)}/{len(propuestas)} "
-                   f"propuestas aprobadas).")
-    elif r["alertas"] > 0:
-        st.warning(f"⚠ **{r['alertas']} alertas**, pero el re-ruteo no halla un reordenamiento "
-                   f"que mejore (las ventanas ya no dan holgura).")
+    if modo_clasico:
+        st.caption("Gemelo operativo **SIMULADO**. Trazos rectos = respaldo haversine (sin "
+                   "OSRM); con **OSRM local** seguiran las calles. Decide el re-ruteo en las "
+                   "tarjetas de mas abajo.")
     else:
-        st.success("Sin alertas: todas las entregas proyectadas dentro de ventana.")
+        st.caption("Gemelo operativo **SIMULADO** e interactivo: cuando un vehiculo llega a su "
+                   "incidencia se **paraliza** y muestra su tarjeta en el mapa (Aprobar / "
+                   "Mantener) mientras los demas siguen. Trazos rectos = respaldo haversine; "
+                   "con **OSRM local** seguiran las calles.")
 
-    kpi_row([
-        {"label": "OTD simulado", "value": f"{r['otd'] * 100:.1f}%",
-         "delta": (f"{delta_otd:+.1f} pts vs base" if aprobadas and abs(delta_otd) > 1e-9
-                   else None),
-         "delta_dir": "up" if delta_otd > 1e-9 else "flat",
-         "helptext": "Entregas dentro de ventana con las decisiones aplicadas"},
-        {"label": "Alertas", "value": str(r["alertas"]),
-         "helptext": "Entregas que la cascada de incidencias pone en riesgo de incumplir ventana"},
-        {"label": "Incidencias", "value": str(r["incidencias"]),
-         "helptext": "Eventos aleatorios ocurridos en la jornada"},
-        {"label": "Tardanza maxima", "value": f"{r['tardanza_max_min']:.0f} min"},
-    ])
-
-    # --- Tarjetas de alerta: propuesta de re-ruteo con sustento (decide el usuario) ---
+    # --- KPIs de la jornada ---
+    r_sin = resumen_operacion(esc_sin, incidencias)
     if propuestas:
+        esc_pot = aplicar_propuestas(esc_sin, propuestas,
+                                     [p["vehiculo_id"] for p in propuestas])
+        r_pot = resumen_operacion(esc_pot, incidencias)
+    else:
+        r_pot = r_sin
+
+    if modo_clasico:
+        r = resumen_operacion(esc, incidencias)
+        pendientes = [p for p in propuestas if dec.get(p["vehiculo_id"]) is None]
+        delta_otd = (r["otd"] - r_sin["otd"]) * 100
+        if pendientes:
+            st.warning(f"⚠ **{r['alertas']} alertas** · **{len(pendientes)} propuesta(s)** "
+                       f"esperan tu decision mas abajo.")
+        elif propuestas:
+            st.success(f"Decisiones aplicadas: OTD {r_sin['otd']*100:.1f}% → "
+                       f"**{r['otd']*100:.1f}%** ({len(aprobadas)}/{len(propuestas)} "
+                       f"aprobadas).")
+        elif r["alertas"] > 0:
+            st.warning(f"⚠ **{r['alertas']} alertas**, pero el re-ruteo no halla mejora.")
+        else:
+            st.success("Sin alertas: todas las entregas proyectadas dentro de ventana.")
+        kpi_row([
+            {"label": "OTD simulado", "value": f"{r['otd'] * 100:.1f}%",
+             "delta": (f"{delta_otd:+.1f} pts vs base" if aprobadas and abs(delta_otd) > 1e-9
+                       else None),
+             "delta_dir": "up" if delta_otd > 1e-9 else "flat",
+             "helptext": "Entregas dentro de ventana con las decisiones aplicadas"},
+            {"label": "Alertas", "value": str(r["alertas"])},
+            {"label": "Incidencias", "value": str(r["incidencias"])},
+            {"label": "Tardanza maxima", "value": f"{r['tardanza_max_min']:.0f} min"},
+        ])
+    else:
+        delta_pot = (r_pot["otd"] - r_sin["otd"]) * 100
+        if propuestas:
+            st.info(f"⚠ **{r_sin['alertas']} alertas** · **{len(propuestas)} vehiculo(s)** con "
+                    f"propuesta. Cuando cada uno se paralice en el mapa, decide **Aprobar** o "
+                    f"**Mantener**. OTD base {r_sin['otd']*100:.1f}% → **{r_pot['otd']*100:.1f}%** "
+                    f"si apruebas todas.")
+        elif r_sin["alertas"] > 0:
+            st.warning(f"⚠ **{r_sin['alertas']} alertas**, pero el re-ruteo no halla un "
+                       f"reordenamiento que mejore (ventanas sin holgura).")
+        else:
+            st.success("Sin alertas: todas las entregas proyectadas dentro de ventana.")
+        kpi_row([
+            {"label": "OTD base", "value": f"{r_sin['otd'] * 100:.1f}%",
+             "helptext": "Sin aplicar re-ruteo (peor caso de la jornada)"},
+            {"label": "OTD potencial", "value": f"{r_pot['otd'] * 100:.1f}%",
+             "delta": (f"{delta_pot:+.1f} pts" if abs(delta_pot) > 1e-9 else None),
+             "delta_dir": "up" if delta_pot > 1e-9 else "flat",
+             "helptext": "Si apruebas todas las propuestas de re-ruteo en el mapa"},
+            {"label": "Alertas", "value": str(r_sin["alertas"])},
+            {"label": "Incidencias", "value": str(r_sin["incidencias"])},
+        ])
+
+    # --- Tarjetas server-side (solo en modo clasico; en fluido se decide en el mapa) ---
+    if modo_clasico and propuestas:
         render_divider()
         hc1, hc2 = st.columns([3, 2])
         hc1.markdown("#### Alertas con propuesta de re-ruteo")
@@ -248,6 +285,9 @@ def render():
     # --- Dashboards de resultados de la operacion ---
     render_divider()
     st.markdown("#### Resultados de la operacion (simulada)")
+    if not modo_clasico:
+        st.caption("Reflejan la jornada **base** (sin re-ruteo). Las decisiones interactivas se "
+                   "toman en el mapa de arriba, por vehiculo.")
     df_op = tabla_operacion(esc)
     d1, d2 = st.columns(2, gap="large")
     with d1:
