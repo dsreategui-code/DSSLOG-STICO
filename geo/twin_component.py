@@ -53,11 +53,14 @@ def _datos_gemelo(escenario: dict) -> dict:
             lons.append(lon)
             lats.append(lat)
             tinc = p.get("t_incidencia")
+            talerta = p.get("t_alerta")
             pedidos.append({"lon": lon, "lat": lat, "eta": float(p["eta_min"]),
                             "serv": float(p.get("servicio_min", 0.0)),
                             "iri": float(p.get("iri", 0.0)), "id": p["pedido_id"],
                             "inc": bool(p.get("incidencia", False)),
-                            "tinc": float(tinc) if tinc is not None else -1.0})
+                            "tinc": float(tinc) if tinc is not None else -1.0,
+                            "alerta": bool(p.get("alerta", False)),
+                            "talerta": float(talerta) if talerta is not None else -1.0})
         path.append([hub["lon"], hub["lat"]])       # regreso al hub
         ts.append(ts[-1] + 5.0)
         trips.append({"veh": veh, "path": path, "timestamps": ts})
@@ -105,9 +108,11 @@ _PLANTILLA = r"""
       if(t>=p.eta+p.serv)return 'entregado';
       if(p.inc&&t>=p.tinc&&t<p.eta+p.serv)return 'incidencia';
       if(t>=p.eta)return 'en_servicio';
+      if(p.alerta&&p.talerta>=0&&t>=p.talerta)return 'en_riesgo';
       if(p.iri>=0.61)return 'en_riesgo';
       return 'pendiente';
     }
+    function enAlerta(p,t){return (p.alerta&&p.talerta>=0&&t>=p.talerta&&t<p.eta)||(p.inc&&t>=p.tinc&&t<p.eta+p.serv);}
     function headPos(trip,t){var ts=trip.timestamps,pa=trip.path;if(t<=ts[0])return pa[0];if(t>=ts[ts.length-1])return pa[pa.length-1];for(var i=0;i<ts.length-1;i++){if(t>=ts[i]&&t<=ts[i+1]){var f=(ts[i+1]>ts[i])?(t-ts[i])/(ts[i+1]-ts[i]):1;return [pa[i][0]+f*(pa[i+1][0]-pa[i][0]),pa[i][1]+f*(pa[i+1][1]-pa[i][1])];}}return pa[pa.length-1];}
     var deckgl=new deck.DeckGL({container:'map',map:maplibregl,
       mapStyle:'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
@@ -124,8 +129,8 @@ _PLANTILLA = r"""
     function hhmm(m){m=Math.round(m);return ('0'+Math.floor(m/60)).slice(-2)+':'+('0'+(m%60)).slice(-2);}
     function render(){
       var activos=DATA.pedidos.filter(function(p){return p.inc&&t>=p.tinc&&t<p.eta+p.serv+20;});
-      var entregados=0,vistas=0;
-      for(var i=0;i<DATA.pedidos.length;i++){if(t>=DATA.pedidos[i].eta+DATA.pedidos[i].serv)entregados++;if(DATA.pedidos[i].inc&&t>=DATA.pedidos[i].tinc)vistas++;}
+      var entregados=0,vistas=0,alertas=0;
+      for(var i=0;i<DATA.pedidos.length;i++){var q=DATA.pedidos[i];if(t>=q.eta+q.serv)entregados++;if(q.inc&&t>=q.tinc)vistas++;if(enAlerta(q,t))alertas++;}
       var pulso=400+260*Math.abs(Math.sin(t/2.2));
       var trips=new deck.TripsLayer({id:'tr',data:DATA.trips,getPath:function(d){return d.path;},getTimestamps:function(d){return d.timestamps;},getColor:[21,112,239],opacity:0.7,widthMinPixels:3,trailLength:80,currentTime:t});
       var rings=new deck.ScatterplotLayer({id:'rg',data:activos,getPosition:function(d){return [d.lon,d.lat];},filled:false,stroked:true,getLineColor:[217,45,32],lineWidthMinPixels:2,getRadius:pulso,radiusMinPixels:10,radiusMaxPixels:44,updateTriggers:{getRadius:t}});
@@ -134,7 +139,8 @@ _PLANTILLA = r"""
       var hub=new deck.ScatterplotLayer({id:'hb',data:[DATA.hub],getPosition:function(d){return [d.lon,d.lat];},getFillColor:[12,17,29],getRadius:180,radiusMinPixels:7});
       deckgl.setProps({layers:[trips,rings,peds,veh,hub]});
       document.getElementById('clk').textContent=done?'Jornada completada':hhmm(t);
-      document.getElementById('kpi').innerHTML='entregados '+entregados+'/'+DATA.pedidos.length+' &middot; incidencias '+vistas;
+      var av=document.getElementById('kpi');
+      av.innerHTML='entregados '+entregados+'/'+DATA.pedidos.length+' &middot; incidencias '+vistas+' &middot; <b style="color:'+(alertas>0?'#B42318':'#475467')+';">alertas '+alertas+'</b>';
     }
     function loop(now){var dt=Math.min(0.05,(now-last)/1000);last=now;t+=dt*mult*20;if(t>=DATA.tmax){t=DATA.tmax;playing=false;done=true;pp.innerHTML='&#8635; Reiniciar';}render();if(playing)requestAnimationFrame(loop);}
     render();requestAnimationFrame(loop);

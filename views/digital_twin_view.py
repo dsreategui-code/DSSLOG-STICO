@@ -15,7 +15,8 @@ from components.layout import render_view_title, render_divider, render_footer
 from components.cards import kpi_row
 from core.demo_scenario import construir_escenario_demo
 from core.telemetry import construir_telemetria, estado_pedidos_en_tick
-from core.twin_sim import resumen_operacion, simular_incidencias, tabla_operacion
+from core.twin_sim import (mitigar_con_reruteo, resumen_operacion, simular_incidencias,
+                           tabla_alertas, tabla_operacion)
 from dashboards.risk_dashboard import fig_iri_clasificacion
 from dashboards.twin_dashboard import (fig_entregas_por_hora, fig_estado_final,
                                        fig_tardanza_por_vehiculo)
@@ -87,14 +88,23 @@ def render():
         st.session_state.dt_bump = int(st.session_state.dt_bump) + 1
     semilla = (int(semilla_base) + int(st.session_state.dt_bump)) % 10000
 
-    modo_clasico = st.checkbox(
+    o1, o2 = st.columns([2.6, 2.4])
+    reruteo = o1.toggle(
+        "Re-ruteo automatico del cerebro ante alertas", value=True,
+        help="Cuando una incidencia dispara alertas, el cerebro re-secuencia los pendientes "
+             "de los vehiculos afectados (regla de ventana mas proxima) para recuperar OTD.")
+    modo_clasico = o2.checkbox(
         "Mapa clasico por ticks (respaldo)", value=False,
         help="El mapa fluido se anima en el navegador sin recargar la pagina. Si no se "
              "visualiza bien, activa el mapa clasico.")
 
     # Inyeccion de incidencias aleatorias (reproducible con la semilla)
-    esc, incidencias = simular_incidencias(esc_base, tasa=intensidad / 100.0,
-                                           seed=int(semilla))
+    esc_sin, incidencias = simular_incidencias(esc_base, tasa=intensidad / 100.0,
+                                               seed=int(semilla))
+    if reruteo:
+        esc, acciones = mitigar_con_reruteo(esc_sin)
+    else:
+        esc, acciones = esc_sin, []
 
     tick, max_tick = 0, 0
     if modo_clasico:
@@ -129,13 +139,40 @@ def render():
                "la distancia base (haversine); al activar **OSRM local** las rutas siguen las "
                "calles reales. Las incidencias surgen de forma aleatoria segun la intensidad.")
 
-    # --- KPIs de la jornada ---
+    # --- Alertas de la operacion (saltan con la cascada de incidencias) ---
     r = resumen_operacion(esc, incidencias)
+    r_sin = resumen_operacion(esc_sin, incidencias)
+    recuperadas = sum(a["recuperadas"] for a in acciones)
+    min_reducidos = sum(a["tard_antes_min"] - a["tard_despues_min"] for a in acciones)
+    if r["alertas"] > 0:
+        base = (f"⚠ **{r['alertas']} alertas**: {r['incidencias']} incidencias ponen en "
+                f"riesgo de incumplir ventana a esas entregas.")
+        if reruteo and recuperadas > 0:
+            st.warning(base + f" El cerebro re-secuencio **{len(acciones)} vehiculo(s)** y "
+                       f"recupero **{recuperadas} entrega(s)** "
+                       f"(OTD {r_sin['otd']*100:.1f}% → {r['otd']*100:.1f}%).")
+        elif reruteo and acciones:
+            st.warning(base + f" El cerebro re-secuencio **{len(acciones)} vehiculo(s)** y "
+                       f"redujo la tardanza acumulada en **{min_reducidos:.0f} min**.")
+        elif reruteo:
+            st.warning(base + " El re-ruteo no encontro un reordenamiento que mejore (las "
+                       "ventanas ya no dan holgura).")
+        else:
+            st.warning(base + " Re-ruteo automatico **desactivado**: las alertas no se "
+                       "mitigan y el OTD cae.")
+    else:
+        st.success("Sin alertas: todas las entregas proyectadas dentro de ventana.")
+
+    # --- KPIs de la jornada ---
+    delta_otd = (r["otd"] - r_sin["otd"]) * 100
     kpi_row([
         {"label": "OTD simulado", "value": f"{r['otd'] * 100:.1f}%",
+         "delta": (f"{delta_otd:+.1f} pts vs sin re-ruteo" if reruteo and abs(delta_otd) > 1e-9
+                   else None),
+         "delta_dir": "up" if delta_otd > 1e-9 else "flat",
          "helptext": "Entregas dentro de ventana en esta jornada simulada"},
-        {"label": "Pedidos en riesgo (IRI)", "value": str(r["en_riesgo"]),
-         "helptext": "Pedidos con riesgo alto/critico de incumplir ventana"},
+        {"label": "Alertas", "value": str(r["alertas"]),
+         "helptext": "Entregas que la cascada de incidencias pone en riesgo de incumplir ventana"},
         {"label": "Incidencias", "value": str(r["incidencias"]),
          "helptext": "Eventos aleatorios ocurridos en la jornada"},
         {"label": "Tardanza maxima", "value": f"{r['tardanza_max_min']:.0f} min"},
@@ -160,12 +197,21 @@ def render():
         st.plotly_chart(fig_estado_final(df_op), use_container_width=True,
                         config={"displayModeBar": False})
 
+    df_alertas = tabla_alertas(esc)
     if incidencias:
         import pandas as pd
-        with st.expander(f"Detalle de incidencias ({len(incidencias)})"):
+        e1, e2 = st.columns(2)
+        with e1.expander(f"Detalle de incidencias ({len(incidencias)})"):
             st.dataframe(pd.DataFrame(incidencias)[["hora", "vehiculo_id", "pedido_id",
                                                     "distrito", "retraso_min"]],
                          use_container_width=True, hide_index=True)
+        with e2.expander(f"Alertas disparadas ({len(df_alertas)})"):
+            if not df_alertas.empty:
+                st.dataframe(df_alertas[["hora_alerta", "vehiculo_id", "pedido_id",
+                                         "distrito", "tardanza_min"]],
+                             use_container_width=True, hide_index=True)
+            else:
+                st.caption("Las incidencias no llegaron a poner entregas fuera de ventana.")
     else:
         st.caption("Sin incidencias en esta jornada (sube la intensidad o cambia la semilla).")
 
