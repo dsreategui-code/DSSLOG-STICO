@@ -11,6 +11,10 @@ umbral_riesgo_critico,0.81
 max_replanificaciones,3
 penalizacion_estabilidad,8.0
 horizonte_replan_paradas,8
+nivel_servicio,0.90
+cv_tiempo,0.25
+usar_alns,1
+iteraciones_alns,250
 usar_osrm,1
 usar_cache_osrm,1
 velocidad_simulacion_demo,1.0

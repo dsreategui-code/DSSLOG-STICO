@@ -141,7 +141,12 @@ def planificar(contexto: dict, *, fecha: Optional[str] = None, osrm=None,
                              tiempos_servicio=contexto.get("tiempos_servicio"),
                              jornada_inicio=hub.hora_apertura, jornada_fin=hub.hora_cierre)
 
-    candidatas = generar_candidatas(modelo, contexto["perfiles"], params)
+    # Ventanas probabilisticas: buffer de nivel de servicio por nodo (chance-constrained).
+    from core.uncertainty import buffer_sla_por_nodo
+    buffer_sla = buffer_sla_por_nodo(ctx_mat["matriz"], cv=float(params.cv_tiempo),
+                                     alpha=float(params.nivel_servicio))
+
+    candidatas = generar_candidatas(modelo, contexto["perfiles"], params, buffer_sla=buffer_sla)
 
     if robusto:
         from core.robust_evaluation import evaluar_robusto, recomendar_robusto

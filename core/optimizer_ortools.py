@@ -74,8 +74,13 @@ class ModeloNumerico:
 
 
 def resolver_cvrptw(modelo: ModeloNumerico, perfil: PerfilDecision,
-                    params: Parametros) -> dict:
-    """Resuelve el CVRPTW para un perfil. Devuelve dict con rutas, no_servidos y estado."""
+                    params: Parametros, buffer_sla_min=None) -> dict:
+    """Resuelve el CVRPTW para un perfil. Devuelve dict con rutas, no_servidos y estado.
+
+    `buffer_sla_min`: buffer de seguridad por nodo (VENTANAS PROBABILISTICAS). Si se entrega,
+    la penalizacion de riesgo se aplica sobre `cierre - buffer_j` (margen derivado de la
+    variabilidad) en vez de un margen fijo -> el plan a priori apunta a un nivel de servicio.
+    """
     if not ORTOOLS_OK:
         return {"status": "or-tools-no-disponible", "rutas": {}, "no_servidos": [],
                 "perfil": perfil.perfil}
@@ -121,9 +126,13 @@ def resolver_cvrptw(modelo: ModeloNumerico, perfil: PerfilDecision,
             # Penalizacion suave por tardanza (arribo despues del cierre).
             if coef_tard > 0:
                 tdim.SetCumulVarSoftUpperBound(idx, fin, coef_tard)
-            # Penalizacion suave por riesgo: arribar con poco margen al cierre.
+            # Penalizacion suave por riesgo: arribar con poco margen al cierre. El margen es
+            # el buffer de nivel de servicio (chance-constrained) si se entrega, o fijo.
             if coef_riesgo > 0:
-                margen = max(ini, fin - MARGEN_RIESGO_MIN)
+                buf = (int(round(buffer_sla_min[node]))
+                       if buffer_sla_min is not None and node < len(buffer_sla_min)
+                       else MARGEN_RIESGO_MIN)
+                margen = max(ini, fin - buf)
                 tdim.SetCumulVarSoftUpperBound(idx, margen, coef_riesgo)
 
     # Balance de carga entre rutas (w_balance) via penalizacion del span de tiempo.

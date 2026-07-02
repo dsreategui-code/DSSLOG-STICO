@@ -40,8 +40,8 @@ def test_pipeline_completo_factible_y_recomienda():
     res = planificar(_contexto())
     assert res["factible"] is True
     assert res["matriz_origen"] == "haversine_respaldo"   # sin OSRM en pruebas
-    assert len(res["candidatas"]) == 3
-    assert res["perfil_recomendado"] in {"eficiente", "puntual", "balanceada"}
+    assert len(res["candidatas"]) >= 3                     # 3 perfiles + candidatas ALNS
+    assert res["perfil_recomendado"] is not None
 
 
 def test_pipeline_genera_escenario_para_gemelo():
@@ -56,7 +56,7 @@ def test_pipeline_genera_escenario_para_gemelo():
 def test_tablas_de_reporte():
     res = planificar(_contexto())
     tc = tabla_candidatas(res)
-    assert len(tc) == 3 and "otd" in tc.columns
+    assert len(tc) >= 3 and "otd" in tc.columns
     iri = tabla_iri(res)
     assert "iri" in iri.columns and len(iri) == 6
     kpis = kpis_recomendada(res)

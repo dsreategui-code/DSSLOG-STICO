@@ -301,6 +301,10 @@ class Parametros:
     max_replanificaciones: int = 3
     penalizacion_estabilidad: float = 8.0     # min-equivalente por cada cambio de secuencia
     horizonte_replan_paradas: int = 8         # horizonte limitado: nº de paradas a reconsiderar
+    nivel_servicio: float = 0.90              # alpha para ventanas probabilisticas (chance-constr.)
+    cv_tiempo: float = 0.25                   # coef. de variacion del tiempo de viaje (buffer SLA)
+    usar_alns: bool = True                    # refinar candidatas con ALNS (metaheuristica)
+    iteraciones_alns: int = 250               # presupuesto de iteraciones del ALNS
     usar_osrm: bool = True
     usar_cache_osrm: bool = True
     velocidad_simulacion_demo: float = 1.0
@@ -313,13 +317,20 @@ class Parametros:
             d = dict(zip(df["parametro"].astype(str), df["valor"]))
         base = cls()
         for campo in base.__dataclass_fields__:
-            if campo in d and pd.notna(d[campo]):
-                tipo = type(getattr(base, campo))
-                try:
-                    val = tipo(d[campo]) if tipo is not bool else str(d[campo]).strip().lower() in ("1", "true", "si", "sí", "x")
-                    setattr(base, campo, val)
-                except (TypeError, ValueError):
-                    pass
+            if campo not in d or not pd.notna(d[campo]):
+                continue
+            tipo = type(getattr(base, campo))
+            v = d[campo]
+            try:
+                if tipo is bool:
+                    # Los CSV traen 1/0 (que pandas lee como 1.0/0.0) o texto: se acepta ambos.
+                    val = (bool(float(v)) if isinstance(v, (int, float))
+                           else str(v).strip().lower() in ("1", "1.0", "true", "si", "sí", "x", "verdadero"))
+                else:
+                    val = tipo(v)
+                setattr(base, campo, val)
+            except (TypeError, ValueError):
+                pass
         return base
 
 

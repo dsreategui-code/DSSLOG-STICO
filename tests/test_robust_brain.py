@@ -73,7 +73,7 @@ def test_pipeline_robusto_dro():
     # peor caso no puede ser mejor que el nominal en riesgo (OTD peor <= OTD nominal)
     e0 = res["evaluaciones"][0]
     assert e0["otd_peor"] <= e0["otd_nominal"] + 1e-9
-    assert res["perfil_recomendado"] in {"eficiente", "robusta"}
+    assert res["perfil_recomendado"] is not None       # puede ser un perfil o una candidata ALNS
     assert res["escenario"]["rutas"]
     assert "nominal" in res["ambiguedad"]
 

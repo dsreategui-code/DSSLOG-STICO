@@ -86,3 +86,28 @@ def aplicar_config(incid_prob: np.ndarray, ausencia: np.ndarray,
     ip = np.clip(incid_prob * cfg.mult_incidencia, 0.0, 1.0)
     au = np.clip(ausencia * cfg.mult_ausencia, 0.0, 1.0)
     return ip, au
+
+
+# --------------------------------------------------------------------------- #
+# Ventanas probabilisticas (chance-constrained): buffer de nivel de servicio
+# --------------------------------------------------------------------------- #
+# Cuantil normal z_alpha para el nivel de servicio alpha (P(a tiempo) >= alpha).
+_Z_ALPHA = {0.80: 0.8416, 0.85: 1.0364, 0.90: 1.2816, 0.95: 1.6449, 0.975: 1.9600}
+
+
+def z_alpha(alpha: float) -> float:
+    return _Z_ALPHA[min(_Z_ALPHA, key=lambda k: abs(k - alpha))]
+
+
+def buffer_sla_por_nodo(tiempo_min, cv: float = 0.25, alpha: float = 0.9) -> List[float]:
+    """Buffer de seguridad por nodo (min) para VENTANAS PROBABILISTICAS.
+
+    En vez de un margen fijo, el buffer del cliente j crece con la variabilidad esperada del
+    tiempo para alcanzarlo: `buffer_j = z_alpha * cv * T[0][j]` (T = matriz contextual). Asi
+    los clientes mas lejanos/congestionados reciben mas colchon, aproximando la restriccion
+    `P(llegada_j <= cierre_j) >= alpha`. Es una aproximacion documentada (la varianza real se
+    acumula a lo largo de la ruta; aqui se usa el tiempo directo como proxy monotono).
+    """
+    z = z_alpha(alpha)
+    T0 = np.asarray(tiempo_min, dtype=float)[0]
+    return [float(z * cv * T0[j]) for j in range(len(T0))]   # nodo 0 = 0 (T0[0]=0)

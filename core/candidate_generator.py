@@ -83,14 +83,30 @@ def kpis_candidata(resultado: dict, modelo: ModeloNumerico) -> dict:
 
 
 def generar_candidatas(modelo: ModeloNumerico, perfiles: Sequence[PerfilDecision],
-                       params: Parametros) -> List[dict]:
-    """Genera una candidata por perfil. Devuelve [{perfil, resultado, kpis}]."""
+                       params: Parametros, buffer_sla=None) -> List[dict]:
+    """Genera candidatas: una por perfil con OR-Tools (ventanas probabilisticas via
+    `buffer_sla`) y, si `params.usar_alns`, refina la mejor con ALNS y agrega sus elites
+    diversas. Devuelve [{perfil, resultado, kpis}]."""
     candidatas = []
+    mejor_ot, mejor_clave = None, (float("inf"), float("inf"))
     for perfil in perfiles:
-        resultado = resolver_cvrptw(modelo, perfil, params)
-        candidatas.append({
-            "perfil": perfil.perfil,
-            "resultado": resultado,
-            "kpis": kpis_candidata(resultado, modelo),
-        })
+        resultado = resolver_cvrptw(modelo, perfil, params, buffer_sla)
+        candidatas.append({"perfil": perfil.perfil, "resultado": resultado,
+                           "kpis": kpis_candidata(resultado, modelo)})
+        if resultado.get("status") == "ok" and resultado.get("rutas"):
+            tard = sum(r.tardanza_total_min for r in resultado["rutas"].values())
+            dist = sum(r.distancia_km for r in resultado["rutas"].values())
+            if (tard, dist) < mejor_clave:
+                mejor_clave, mejor_ot = (tard, dist), resultado
+
+    if getattr(params, "usar_alns", False) and mejor_ot is not None:
+        from core.alns import optimizar
+        perfil_alns = PerfilDecision("robusta", w_tiempo=0.6, w_tardanza=1.0, w_riesgo=1.0)
+        out = optimizar(modelo, params, perfil=perfil_alns, buffer_sla=buffer_sla,
+                        warm=mejor_ot, n_elites=2)
+        for i, res_e in enumerate([out["best"]] + out["elites"]):
+            if res_e and res_e.get("status") == "ok" and res_e.get("rutas"):
+                res_e["perfil"] = f"alns-{i}"          # etiqueta unica por candidata ALNS
+                candidatas.append({"perfil": f"alns-{i}", "resultado": res_e,
+                                   "kpis": kpis_candidata(res_e, modelo)})
     return candidatas

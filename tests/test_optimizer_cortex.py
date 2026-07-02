@@ -80,7 +80,9 @@ def test_generar_candidatas_por_perfil():
     modelo = preparar_modelo(hub, pedidos, vehiculos, t, d)
     perfiles = [PerfilDecision("eficiente", w_tiempo=1.0),
                 PerfilDecision("balanceada", w_tiempo=0.7, w_balance=0.5)]
-    cands = generar_candidatas(modelo, perfiles, Parametros(tiempo_solver_seg=3))
+    # usar_alns=False para probar solo la generacion por perfil (sin candidatas ALNS extra).
+    cands = generar_candidatas(modelo, perfiles,
+                               Parametros(tiempo_solver_seg=3, usar_alns=False))
     assert len(cands) == 2
     assert {c["perfil"] for c in cands} == {"eficiente", "balanceada"}
     for c in cands:
