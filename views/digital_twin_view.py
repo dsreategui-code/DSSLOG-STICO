@@ -1,21 +1,27 @@
-"""Vista 'Gemelo Digital Operativo' (PyDeck) del DSS CORTEX-LM.
+"""Vista 'Gemelo Digital Operativo' del DSS CORTEX-LM.
 
-Reconstruccion SIMULADA del avance de la operacion (gemelo digital operativo simulado, no
-tiempo real fisico ni GPS). Muestra en PyDeck el HUB, los pedidos (coloreados por estado),
-las rutas y los vehiculos moviendose por ticks; permite forzar una incidencia y evaluar la
-replanificacion intra-vehiculo con el motor CORTEX, aceptandola o rechazandola.
+Reconstruccion SIMULADA del avance de la operacion de ultima milla (gemelo operativo simulado,
+no tiempo real fisico ni GPS). El mapa fluido (deck.gl) anima en el navegador sin recargar la
+pagina; las incidencias aparecen de forma ALEATORIA segun una intensidad configurable (con
+semilla reproducible) y se propagan sobre las ETAs. Debajo se muestran los dashboards de
+resultados de la jornada. El mapa clasico por ticks queda como respaldo.
 """
 import time
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from components.layout import render_view_title, render_divider, render_footer
 from components.cards import kpi_row
-from core.data_models import Parametros
-from core.demo_scenario import construir_escenario_demo, replan_vehiculo_demo
+from core.demo_scenario import construir_escenario_demo
 from core.telemetry import construir_telemetria, estado_pedidos_en_tick
+from core.twin_sim import resumen_operacion, simular_incidencias, tabla_operacion
+from dashboards.risk_dashboard import fig_iri_clasificacion
+from dashboards.twin_dashboard import (fig_entregas_por_hora, fig_estado_final,
+                                       fig_tardanza_por_vehiculo)
 from geo.pydeck_layers import (capa_etiquetas_vehiculos, capa_hub, capa_pedidos,
                                capa_rutas, capa_vehiculos, construir_deck)
+from geo.twin_component import html_gemelo
 from services.data_loader import dataset_exists, generar_dataset_demo
 from utils.constants import VISTA_HOME
 
@@ -28,8 +34,8 @@ def _init():
     ss.setdefault("dt_play", False)
     ss.setdefault("dt_paso", 5.0)
     ss.setdefault("dt_veloc", "1x")
-    ss.setdefault("dt_replan", None)
     ss.setdefault("dt_escenario", None)
+    ss.setdefault("dt_bump", 0)
 
 
 def _escenario():
@@ -38,49 +44,17 @@ def _escenario():
     return st.session_state.dt_escenario
 
 
-def _reproyectar(esc):
-    """Recalcula geometrias tras un cambio de secuencia (ETAs ya actualizadas)."""
-    for veh, paradas in esc["rutas"].items():
-        esc["geometrias"][veh] = ([[esc["hub"]["lon"], esc["hub"]["lat"]]]
-                                  + [[p["coord"][1], p["coord"][0]] for p in paradas])
-
-
-def _aplicar_replan(esc, veh, res, t_sim):
-    """Aplica la secuencia propuesta a los pendientes del vehiculo y reproyecta ETAs."""
-    from core.demo_scenario import VELOCIDAD_KMH, _haversine_km
-    paradas = esc["rutas"][veh]
-    pid_a_parada = {p["pedido_id"]: p for p in paradas}
-    completadas = [p for p in paradas if p["eta_min"] + p["servicio_min"] <= t_sim]
-    pids_prop = [res["pedido_ids"][k] for k in res["secuencia_propuesta"]]
-    pendientes = [pid_a_parada[pid] for pid in pids_prop if pid in pid_a_parada]
-    nuevo = completadas + [p for p in pendientes if p not in completadas]
-    # reproyectar ETAs de los pendientes desde el momento/posicion actual
-    t = float(t_sim)
-    prev = (completadas[-1]["coord"] if completadas else (esc["hub"]["lat"], esc["hub"]["lon"]))
-    for p in nuevo:
-        if p in completadas:
-            prev = p["coord"]
-            continue
-        t += _haversine_km(prev, p["coord"]) / VELOCIDAD_KMH * 60.0
-        p["eta_min"] = round(t, 1)
-        p["tardanza_min"] = round(max(0.0, t - p["ventana_fin_min"]), 1)
-        t += p["servicio_min"]
-        prev = p["coord"]
-    esc["rutas"][veh] = nuevo
-    _reproyectar(esc)
-
-
 def render():
     render_view_title(
         "Gemelo Digital Operativo",
-        "Reconstruccion simulada del avance de la jornada de ultima milla. Visualiza rutas, "
-        "vehiculos y estado de los pedidos por ticks; permite forzar una incidencia y evaluar "
-        "la replanificacion intra-vehiculo. Es un gemelo operativo simulado, no tiempo real.",
+        "Reconstruccion simulada del avance de la jornada de ultima milla. Las incidencias "
+        "(trafico, acceso, ausencia) aparecen de forma aleatoria segun la intensidad que "
+        "configures y se propagan sobre los tiempos. Es un gemelo operativo simulado, no "
+        "tiempo real fisico.",
         eyebrow="CORTEX-LM  /  Demostracion",
     )
     _init()
-    # El escenario puede venir de Planificacion (session_state) o construirse del dataset
-    # demo. Si no hay ninguno y el dataset no existe (despliegue limpio), ofrecer generarlo.
+    # El escenario puede venir de Planificacion (session_state) o del dataset demo.
     if st.session_state.dt_escenario is None and not dataset_exists():
         st.warning("El dataset demo aun no existe en este entorno. Genéralo o usa "
                    "'Planificacion' para enviar un escenario al gemelo.")
@@ -97,19 +71,37 @@ def render():
             st.rerun()
         render_footer()
         return
-    esc = _escenario()
+
+    esc_base = _escenario()
+
+    # --- Configuracion de la simulacion (incidencias aleatorias) ---
+    cfg1, cfg2, cfg3 = st.columns([2.4, 1.2, 1.4])
+    intensidad = cfg1.slider(
+        "Intensidad de incidencias (probabilidad por parada, %)", 0, 40, 12,
+        help="Probabilidad de que cada parada sufra una incidencia aleatoria (trafico, "
+             "acceso, ausencia). La operacion es simulada y estocastica.")
+    semilla_base = cfg2.number_input(
+        "Semilla", min_value=0, max_value=9999, value=7, step=1, key="dt_seed_input",
+        help="Fija la aleatoriedad para reproducir la misma jornada.")
+    if cfg3.button("Nueva jornada (re-sortear)", use_container_width=True):
+        st.session_state.dt_bump = int(st.session_state.dt_bump) + 1
+    semilla = (int(semilla_base) + int(st.session_state.dt_bump)) % 10000
 
     modo_clasico = st.checkbox(
         "Mapa clasico por ticks (respaldo)", value=False,
         help="El mapa fluido se anima en el navegador sin recargar la pagina. Si no se "
              "visualiza bien, activa el mapa clasico.")
 
+    # Inyeccion de incidencias aleatorias (reproducible con la semilla)
+    esc, incidencias = simular_incidencias(esc_base, tasa=intensidad / 100.0,
+                                           seed=int(semilla))
+
     tick, max_tick = 0, 0
     if modo_clasico:
         paso = float(st.session_state.dt_paso)
         tele = construir_telemetria(esc, paso_tick_min=paso)
         max_tick = int(tele["tick"].max()) if not tele.empty else 0
-        c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1, 1.4, 1.4, 1.2])
+        c1, c2, c3, c4 = st.columns([1, 1, 1, 1.6])
         if c1.button("Iniciar", use_container_width=True):
             st.session_state.dt_play = True
         if c2.button("Pausar", use_container_width=True):
@@ -119,10 +111,8 @@ def render():
         st.session_state.dt_veloc = c4.selectbox(
             "Velocidad", list(VELOCIDADES.keys()),
             index=list(VELOCIDADES).index(st.session_state.dt_veloc))
-        veh_sel = c5.selectbox("Vehiculo (incidencia)", esc["vehiculos"])
-        forzar = c6.button("Forzar incidencia", use_container_width=True)
         st.session_state.dt_tick = st.slider("Tick", 0, max_tick,
-                                             int(st.session_state.dt_tick))
+                                             min(int(st.session_state.dt_tick), max_tick))
         tick = int(st.session_state.dt_tick)
         t_sim = esc["t_inicio_min"] + tick * paso
         df_tick = tele[tele["tick"] == tick]
@@ -130,61 +120,54 @@ def render():
         layers = [capa_rutas(esc), capa_pedidos(df_ped), capa_hub(esc["hub"]),
                   capa_vehiculos(df_tick), capa_etiquetas_vehiculos(df_tick)]
         st.pydeck_chart(construir_deck(layers, esc["hub"]), use_container_width=True)
-        hora = f"{int(t_sim)//60:02d}:{int(t_sim)%60:02d}"
-        en_riesgo = int((df_ped["estado"] == "en_riesgo").sum())
+        st.caption(f"Hora simulada: {int(t_sim)//60:02d}:{int(t_sim)%60:02d}  ·  "
+                   f"tick {tick}/{max_tick}")
     else:
-        import streamlit.components.v1 as components
-        from geo.twin_component import html_gemelo
-        f1, f2 = st.columns([3, 1])
-        veh_sel = f1.selectbox("Vehiculo (incidencia)", esc["vehiculos"])
-        forzar = f2.button("Forzar incidencia", use_container_width=True)
-        components.html(html_gemelo(esc, altura=540), height=730, scrolling=False)
-        t_sim = float(esc["t_inicio_min"])
-        hora = "en vivo (mapa)"
-        en_riesgo = sum(1 for r in esc["rutas"].values() for p in r
-                        if float(p.get("iri", 0.0)) >= 0.61)
+        components.html(html_gemelo(esc, altura=540), height=760, scrolling=False)
 
-    # --- KPIs del escenario ---
+    st.caption("Gemelo operativo **SIMULADO**. Los trazos son rectos porque sin OSRM se usa "
+               "la distancia base (haversine); al activar **OSRM local** las rutas siguen las "
+               "calles reales. Las incidencias surgen de forma aleatoria segun la intensidad.")
+
+    # --- KPIs de la jornada ---
+    r = resumen_operacion(esc, incidencias)
     kpi_row([
-        {"label": "Pedidos", "value": str(esc["n_pedidos"])},
-        {"label": "En riesgo (IRI)", "value": str(en_riesgo),
+        {"label": "OTD simulado", "value": f"{r['otd'] * 100:.1f}%",
+         "helptext": "Entregas dentro de ventana en esta jornada simulada"},
+        {"label": "Pedidos en riesgo (IRI)", "value": str(r["en_riesgo"]),
          "helptext": "Pedidos con riesgo alto/critico de incumplir ventana"},
-        {"label": "Vehiculos", "value": str(len(esc["vehiculos"]))},
-        {"label": "Reloj", "value": hora},
+        {"label": "Incidencias", "value": str(r["incidencias"]),
+         "helptext": "Eventos aleatorios ocurridos en la jornada"},
+        {"label": "Tardanza maxima", "value": f"{r['tardanza_max_min']:.0f} min"},
     ])
 
-    # --- Replanificacion (incidencia) ---
-    if forzar:
-        completadas_n = int(sum(1 for p in esc["rutas"].get(veh_sel, [])
-                                if float(p["eta_min"]) <= t_sim))   # paradas ya vencidas
-        res = replan_vehiculo_demo(esc, veh_sel, Parametros(tiempo_solver_seg=3),
-                                   t_actual_rel_min=max(0.0, t_sim - esc["t_inicio_min"]),
-                                   completadas_n=completadas_n, incidencia_factor=1.5)
-        st.session_state.dt_replan = {"veh": veh_sel, "res": res, "t_sim": t_sim}
+    # --- Dashboards de resultados de la operacion ---
+    render_divider()
+    st.markdown("#### Resultados de la operacion (simulada)")
+    df_op = tabla_operacion(esc)
+    d1, d2 = st.columns(2, gap="large")
+    with d1:
+        st.plotly_chart(fig_entregas_por_hora(df_op), use_container_width=True,
+                        config={"displayModeBar": False})
+    with d2:
+        st.plotly_chart(fig_tardanza_por_vehiculo(df_op), use_container_width=True,
+                        config={"displayModeBar": False})
+    d3, d4 = st.columns(2, gap="large")
+    with d3:
+        st.plotly_chart(fig_iri_clasificacion(df_op), use_container_width=True,
+                        config={"displayModeBar": False})
+    with d4:
+        st.plotly_chart(fig_estado_final(df_op), use_container_width=True,
+                        config={"displayModeBar": False})
 
-    replan = st.session_state.dt_replan
-    if replan:
-        render_divider()
-        res = replan["res"]
-        st.markdown(f"#### Incidencia en {replan['veh']} — evaluacion de replanificacion")
-        comp = res["comparacion"]
-        cc1, cc2, cc3 = st.columns(3)
-        cc1.metric("Tardanza actual (proy.)", f"{comp['actual']['tardanza_total_min']:.0f} min")
-        cc2.metric("Tardanza propuesta", f"{comp['propuesta']['tardanza_total_min']:.0f} min",
-                   delta=f"{comp['propuesta']['tardanza_total_min'] - comp['actual']['tardanza_total_min']:.0f} min",
-                   delta_color="inverse")
-        cc3.metric("Cambios de secuencia", str(res["cambios_secuencia"]))
-        st.info(f"**{res['recomendacion']}.** {res['explicacion']}")
-        b1, b2 = st.columns(2)
-        if b1.button("✓ Aceptar replanificacion", use_container_width=True,
-                     disabled=(res["accion"] != "replanificar")):
-            _aplicar_replan(esc, replan["veh"], res, replan["t_sim"])
-            st.session_state.dt_replan = None
-            st.success("Replanificacion aplicada. Mapa y KPIs actualizados.")
-            st.rerun()
-        if b2.button("✗ Mantener ruta actual", use_container_width=True):
-            st.session_state.dt_replan = None
-            st.rerun()
+    if incidencias:
+        import pandas as pd
+        with st.expander(f"Detalle de incidencias ({len(incidencias)})"):
+            st.dataframe(pd.DataFrame(incidencias)[["hora", "vehiculo_id", "pedido_id",
+                                                    "distrito", "retraso_min"]],
+                         use_container_width=True, hide_index=True)
+    else:
+        st.caption("Sin incidencias en esta jornada (sube la intensidad o cambia la semilla).")
 
     render_divider()
     if st.button("Volver al inicio", key="dt_back"):
@@ -193,10 +176,10 @@ def render():
         st.rerun()
     render_footer()
 
-    # --- Bucle de animacion por ticks (gemelo operativo simulado) ---
-    if st.session_state.dt_play and tick < max_tick:
+    # --- Bucle de animacion por ticks (solo modo clasico) ---
+    if modo_clasico and st.session_state.dt_play and tick < max_tick:
         time.sleep(VELOCIDADES[st.session_state.dt_veloc])
         st.session_state.dt_tick = tick + 1
         st.rerun()
-    elif tick >= max_tick:
+    elif modo_clasico and tick >= max_tick:
         st.session_state.dt_play = False

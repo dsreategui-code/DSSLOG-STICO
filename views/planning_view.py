@@ -164,7 +164,7 @@ def render():
     if a1.button("Enviar al Gemelo Digital", type="primary", use_container_width=True):
         st.session_state.dt_escenario = res["escenario"]
         st.session_state.dt_tick = 0
-        st.session_state.dt_replan = None
+        st.session_state.dt_bump = 0
         st.session_state.vista = VISTA_DIGITAL_TWIN
         st.rerun()
     a2.download_button("Exportar candidatas (CSV)", tc.to_csv(index=False).encode("utf-8"),
