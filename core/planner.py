@@ -96,13 +96,29 @@ def _escenario_desde_evaluacion(contexto, pedidos, modelo, evaluacion) -> dict:
 
 
 def planificar(contexto: dict, *, fecha: Optional[str] = None, osrm=None,
-               max_pedidos: Optional[int] = None, hora_ref: str = "09:00") -> dict:
+               max_pedidos: Optional[int] = None, hora_ref: str = "09:00",
+               robusto: bool = True, radio_ambiguedad: str = "medio",
+               alpha: float = 0.9, beta: float = 1.0) -> dict:
     """Ejecuta el pipeline completo. Devuelve factibilidad, matriz, candidatas, recomendacion
-    y el escenario para el gemelo digital."""
+    y el escenario para el gemelo digital.
+
+    Si `robusto` (por defecto), la seleccion entre candidatas es DISTRIBUCIONALMENTE ROBUSTA
+    (DRO): cada candidata se estresa contra un conjunto de ambiguedad y se elige la de mejor
+    PEOR CASO ajustado por riesgo (CVaR). Si es False, usa la seleccion por utilidad promedio.
+    """
     hub = contexto["hub"]
     pedidos = contexto["pedidos"][:max_pedidos] if max_pedidos else contexto["pedidos"]
     vehiculos = contexto["vehiculos"]
     params = contexto["parametros"]
+
+    # Si no se inyecto un cliente OSRM y los parametros lo piden, se crea uno por defecto
+    # (endpoint OSRM_BASE_URL). Si OSRM no responde, matriz_base_tiempos cae a haversine.
+    if osrm is None and params.usar_osrm:
+        try:
+            from geo.osrm_client import OSRMClient
+            osrm = OSRMClient()
+        except Exception:  # noqa: BLE001
+            osrm = None
 
     sub_ctx = {**contexto, "pedidos": pedidos}
     osrm_disp = False
@@ -126,19 +142,40 @@ def planificar(contexto: dict, *, fecha: Optional[str] = None, osrm=None,
                              jornada_inicio=hub.hora_apertura, jornada_fin=hub.hora_cierre)
 
     candidatas = generar_candidatas(modelo, contexto["perfiles"], params)
-    evaluaciones = evaluar_candidatas(candidatas, modelo, params)
-    reco = recomendar(evaluaciones)
 
-    elegida = next((e for e in evaluaciones if e["perfil"] == reco["recomendada"]),
-                   evaluaciones[0] if evaluaciones else None)
+    if robusto:
+        from core.robust_evaluation import evaluar_robusto, recomendar_robusto
+        from core.uncertainty import conjunto_ambiguedad
+        amb = conjunto_ambiguedad(radio_ambiguedad)
+        evaluaciones = []
+        for cand in candidatas:
+            res = cand["resultado"]
+            if res.get("status") != "ok" or not res.get("rutas"):
+                continue
+            evaluaciones.append(evaluar_robusto(
+                res, modelo, pedidos, contexto["incidencias"], contexto["zonas"], params,
+                ambiguedad=amb, alpha=alpha, beta=beta))
+        reco = recomendar_robusto(evaluaciones)
+        modo = f"robusto (DRO, radio={radio_ambiguedad})"
+        ambiguedad_nombres = [c.nombre for c in amb]
+    else:
+        evaluaciones = evaluar_candidatas(candidatas, modelo, params)
+        reco = recomendar(evaluaciones)
+        modo = "promedio"
+        ambiguedad_nombres = []
+
+    elegida = reco.get("elegida") or next(
+        (e for e in evaluaciones if e["perfil"] == reco["recomendada"]),
+        evaluaciones[0] if evaluaciones else None)
     escenario = _escenario_desde_evaluacion(contexto, pedidos, modelo, elegida)
 
     return {
-        "factible": True, "factibilidad": feas,
+        "factible": True, "factibilidad": feas, "modo": modo,
         "matriz_origen": base["origen"], "factores_contextuales": ctx_mat["factores"],
         "candidatas": [c["kpis"] for c in candidatas],
         "evaluaciones": evaluaciones, "recomendacion": reco,
         "perfil_recomendado": reco["recomendada"],
         "iri_recomendada": elegida["iri"] if elegida else None,
         "escenario": escenario, "n_pedidos": len(pedidos),
+        "ambiguedad": ambiguedad_nombres,
     }

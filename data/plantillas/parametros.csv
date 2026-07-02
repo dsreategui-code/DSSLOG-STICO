@@ -9,6 +9,8 @@ penalizacion_riesgo,1.0
 umbral_retraso_replanificar,20
 umbral_riesgo_critico,0.81
 max_replanificaciones,3
+penalizacion_estabilidad,8.0
+horizonte_replan_paradas,8
 usar_osrm,1
 usar_cache_osrm,1
 velocidad_simulacion_demo,1.0

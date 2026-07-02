@@ -48,6 +48,39 @@ def calcular_iri(muestras: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def var(perdidas, alpha: float = 0.9) -> float:
+    """Value-at-Risk: el cuantil `alpha` de una distribucion de perdidas (p. ej. tardanza)."""
+    a = np.asarray(perdidas, dtype=float)
+    if a.size == 0:
+        return 0.0
+    return float(np.quantile(a, alpha))
+
+
+def cvar(perdidas, alpha: float = 0.9) -> float:
+    """Conditional Value-at-Risk (Expected Shortfall): promedio del peor (1-alpha) de los
+    casos. Es la penalizacion de COLA que hace robusto al motor (Rockafellar & Uryasev)."""
+    a = np.asarray(perdidas, dtype=float)
+    if a.size == 0:
+        return 0.0
+    v = np.quantile(a, alpha)
+    cola = a[a >= v]
+    return float(cola.mean()) if cola.size else float(v)
+
+
+def tardanza_por_escenario(muestras: pd.DataFrame) -> np.ndarray:
+    """Tardanza TOTAL por realizacion (un valor por dia simulado)."""
+    if muestras is None or muestras.empty or "iteracion" not in muestras:
+        return np.array([])
+    return muestras.groupby("iteracion")["tardanza_min"].sum().to_numpy()
+
+
+def otd_por_escenario(muestras: pd.DataFrame) -> np.ndarray:
+    """OTD por realizacion (fraccion a tiempo en cada dia simulado)."""
+    if muestras is None or muestras.empty or "iteracion" not in muestras:
+        return np.array([])
+    return muestras.groupby("iteracion")["a_tiempo"].mean().to_numpy()
+
+
 def kpis_montecarlo(muestras: pd.DataFrame, iri_df: Optional[pd.DataFrame] = None) -> dict:
     """KPIs logisticos agregados sobre las muestras Monte Carlo."""
     if muestras is None or muestras.empty:

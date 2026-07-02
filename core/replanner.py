@@ -23,8 +23,8 @@ import numpy as np
 from core.data_models import Parametros, PerfilDecision
 from core.optimizer_ortools import ModeloNumerico, resolver_cvrptw
 
-PENAL_RIESGO = 30.0           # minutos-equivalente por pedido proyectado tarde
-PENAL_ESTABILIDAD_MIN = 8.0   # costo (min-equivalente) por cada parada que cambia de orden
+BASE_RIESGO_MIN = 30.0        # min-equivalente base por pedido tarde (x params.penalizacion_riesgo)
+PENAL_ESTABILIDAD_DEF = 8.0   # default si params.penalizacion_estabilidad no esta definido
 
 
 @dataclass
@@ -91,8 +91,8 @@ def _proyectar(seq: Sequence[int], origen: int, t0: float, modelo: ModeloNumeric
             "t_fin_min": round(t, 1), "detalle": detalle}
 
 
-def _costo(proy: dict) -> float:
-    return proy["tardanza_total_min"] + PENAL_RIESGO * proy["n_tarde"]
+def _costo(proy: dict, penal_riesgo: float = BASE_RIESGO_MIN) -> float:
+    return proy["tardanza_total_min"] + penal_riesgo * proy["n_tarde"]
 
 
 def _cambios_secuencia(a: Sequence[int], b: Sequence[int]) -> int:
@@ -101,10 +101,10 @@ def _cambios_secuencia(a: Sequence[int], b: Sequence[int]) -> int:
 
 
 def _reparacion_local(seq: List[int], origen: int, t0: float, modelo: ModeloNumerico,
-                      factor: Dict[int, float]) -> List[int]:
+                      factor: Dict[int, float], penal_riesgo: float = BASE_RIESGO_MIN) -> List[int]:
     """Or-opt simple: intenta reubicar cada parada en la mejor posicion (1 pasada)."""
     mejor = list(seq)
-    mejor_costo = _costo(_proyectar(mejor, origen, t0, modelo, factor))
+    mejor_costo = _costo(_proyectar(mejor, origen, t0, modelo, factor), penal_riesgo)
     for i in range(len(seq)):
         for j in range(len(seq)):
             if i == j:
@@ -112,7 +112,7 @@ def _reparacion_local(seq: List[int], origen: int, t0: float, modelo: ModeloNume
             cand = list(mejor)
             nodo = cand.pop(i)
             cand.insert(j, nodo)
-            c = _costo(_proyectar(cand, origen, t0, modelo, factor))
+            c = _costo(_proyectar(cand, origen, t0, modelo, factor), penal_riesgo)
             if c + 1e-9 < mejor_costo:
                 mejor, mejor_costo = cand, c
     return mejor
@@ -149,11 +149,13 @@ def _submodelo_local(origen: int, pendientes: List[int], t_actual: float,
 
 def _reoptimizacion_local(origen: int, pendientes: List[int], t_actual: float,
                           modelo: ModeloNumerico, params: Parametros,
-                          cap_m3: float, cap_kg: float) -> List[int]:
-    """Reoptimiza los pendientes con OR-Tools desde el origen virtual. Devuelve el nuevo
-    orden de nodos (indices originales). Si falla, devuelve el orden actual de pendientes."""
+                          cap_m3: float, cap_kg: float,
+                          perfil: Optional[PerfilDecision] = None) -> List[int]:
+    """Reoptimiza los pendientes con OR-Tools desde el origen virtual, con el PERFIL ACTIVO
+    (o 'puntual' por defecto). Devuelve el nuevo orden de nodos (indices originales); si
+    falla, devuelve el orden actual de pendientes."""
     sub = _submodelo_local(origen, pendientes, t_actual, modelo, cap_m3, cap_kg)
-    perfil = PerfilDecision("puntual", w_tiempo=0.5, w_tardanza=1.0, w_riesgo=0.7)
+    perfil = perfil or PerfilDecision("puntual", w_tiempo=0.5, w_tardanza=1.0, w_riesgo=0.7)
     p = Parametros(**{**params.__dict__, "tiempo_solver_seg": min(5, params.tiempo_solver_seg)})
     res = resolver_cvrptw(sub, perfil, p)
     if res.get("status") != "ok" or not res.get("rutas"):
@@ -171,36 +173,45 @@ def _reoptimizacion_local(origen: int, pendientes: List[int], t_actual: float,
 
 def replanificar_vehiculo(estado: EstadoVehiculo, modelo: ModeloNumerico, params: Parametros, *,
                           factor_tiempo: Optional[Dict[int, float]] = None,
-                          cap_m3: float = 1e9, cap_kg: float = 1e9) -> dict:
-    """Evalua A/B/C, penaliza inestabilidad y emite recomendacion explicable."""
+                          cap_m3: float = 1e9, cap_kg: float = 1e9,
+                          perfil: Optional[PerfilDecision] = None) -> dict:
+    """Evalua A/B/C en HORIZONTE LIMITADO, penaliza inestabilidad (parametros) y emite
+    recomendacion explicable. Solo se reconsideran las proximas K paradas; el resto queda
+    fijo. Las penalizaciones y el horizonte provienen de `params` (no hardcodeados)."""
     factor = factor_tiempo or {}
+    penal_riesgo = BASE_RIESGO_MIN * float(getattr(params, "penalizacion_riesgo", 1.0))
+    penal_estab = float(getattr(params, "penalizacion_estabilidad", PENAL_ESTABILIDAD_DEF))
+    K = max(1, int(getattr(params, "horizonte_replan_paradas", 8)))
+
     pendientes = estado.pendientes()
     if not pendientes:
         return {"accion": "sin_pendientes", "recomendacion": "Mantener ruta actual",
                 "alternativas": {}, "explicacion": "El vehiculo no tiene pedidos pendientes."}
 
     origen, t0 = estado.pos_nodo, estado.t_actual_min
+    horizonte, cola = pendientes[:K], pendientes[K:]   # horizonte limitado: solo K paradas
     seq_A = list(pendientes)
-    seq_B = _reparacion_local(seq_A, origen, t0, modelo, factor)
-    seq_C = _reoptimizacion_local(origen, pendientes, t0, modelo, params, cap_m3, cap_kg)
+    seq_B = _reparacion_local(horizonte, origen, t0, modelo, factor, penal_riesgo) + cola
+    seq_C = _reoptimizacion_local(origen, horizonte, t0, modelo, params, cap_m3, cap_kg,
+                                  perfil) + cola
 
     proy = {"A_mantener": _proyectar(seq_A, origen, t0, modelo, factor),
             "B_reparacion": _proyectar(seq_B, origen, t0, modelo, factor),
             "C_reoptimizacion": _proyectar(seq_C, origen, t0, modelo, factor)}
     secuencias = {"A_mantener": seq_A, "B_reparacion": seq_B, "C_reoptimizacion": seq_C}
 
-    costo_A = _costo(proy["A_mantener"])
+    costo_A = _costo(proy["A_mantener"], penal_riesgo)
     # Mejor alternativa de replanificacion (B o C) por costo + penalizacion de inestabilidad.
     candidatos = []
     for k in ("B_reparacion", "C_reoptimizacion"):
         cambios = _cambios_secuencia(seq_A, secuencias[k])
-        costo_total = _costo(proy[k]) + PENAL_ESTABILIDAD_MIN * cambios
+        costo_total = _costo(proy[k], penal_riesgo) + penal_estab * cambios
         candidatos.append((k, costo_total, cambios))
     mejor_k, mejor_costo, mejor_cambios = min(candidatos, key=lambda x: x[1])
 
     # Aceptar replanificacion solo si el beneficio supera el costo de cambiar.
-    beneficio = costo_A - _costo(proy[mejor_k])
-    costo_cambio = PENAL_ESTABILIDAD_MIN * mejor_cambios
+    beneficio = costo_A - _costo(proy[mejor_k], penal_riesgo)
+    costo_cambio = penal_estab * mejor_cambios
     aceptar = (beneficio > costo_cambio) and (mejor_cambios > 0)
 
     if aceptar:

@@ -299,6 +299,8 @@ class Parametros:
     umbral_retraso_replanificar: float = 20.0
     umbral_riesgo_critico: float = 0.81
     max_replanificaciones: int = 3
+    penalizacion_estabilidad: float = 8.0     # min-equivalente por cada cambio de secuencia
+    horizonte_replan_paradas: int = 8         # horizonte limitado: nº de paradas a reconsiderar
     usar_osrm: bool = True
     usar_cache_osrm: bool = True
     velocidad_simulacion_demo: float = 1.0
