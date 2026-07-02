@@ -98,55 +98,65 @@ def render():
         render_footer()
         return
     esc = _escenario()
-    paso = float(st.session_state.dt_paso)
-    tele = construir_telemetria(esc, paso_tick_min=paso)
-    max_tick = int(tele["tick"].max()) if not tele.empty else 0
 
-    # --- Controles ---
-    c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1, 1.4, 1.4, 1.2])
-    if c1.button("▶ Iniciar", use_container_width=True):
-        st.session_state.dt_play = True
-    if c2.button("⏸ Pausar", use_container_width=True):
-        st.session_state.dt_play = False
-    if c3.button("⏭ Avanzar", use_container_width=True):
-        st.session_state.dt_tick = min(max_tick, st.session_state.dt_tick + 1)
-    st.session_state.dt_veloc = c4.selectbox("Velocidad", list(VELOCIDADES.keys()),
-                                             index=list(VELOCIDADES).index(st.session_state.dt_veloc))
-    veh_sel = c5.selectbox("Vehiculo (incidencia)", esc["vehiculos"])
-    forzar = c6.button("⚠ Forzar incidencia", use_container_width=True)
+    modo_clasico = st.checkbox(
+        "Mapa clasico por ticks (respaldo)", value=False,
+        help="El mapa fluido se anima en el navegador sin recargar la pagina. Si no se "
+             "visualiza bien, activa el mapa clasico.")
 
-    st.session_state.dt_tick = st.slider("Tick", 0, max_tick, int(st.session_state.dt_tick))
-    tick = int(st.session_state.dt_tick)
-    t_sim = esc["t_inicio_min"] + tick * paso
+    tick, max_tick = 0, 0
+    if modo_clasico:
+        paso = float(st.session_state.dt_paso)
+        tele = construir_telemetria(esc, paso_tick_min=paso)
+        max_tick = int(tele["tick"].max()) if not tele.empty else 0
+        c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1, 1.4, 1.4, 1.2])
+        if c1.button("Iniciar", use_container_width=True):
+            st.session_state.dt_play = True
+        if c2.button("Pausar", use_container_width=True):
+            st.session_state.dt_play = False
+        if c3.button("Avanzar", use_container_width=True):
+            st.session_state.dt_tick = min(max_tick, st.session_state.dt_tick + 1)
+        st.session_state.dt_veloc = c4.selectbox(
+            "Velocidad", list(VELOCIDADES.keys()),
+            index=list(VELOCIDADES).index(st.session_state.dt_veloc))
+        veh_sel = c5.selectbox("Vehiculo (incidencia)", esc["vehiculos"])
+        forzar = c6.button("Forzar incidencia", use_container_width=True)
+        st.session_state.dt_tick = st.slider("Tick", 0, max_tick,
+                                             int(st.session_state.dt_tick))
+        tick = int(st.session_state.dt_tick)
+        t_sim = esc["t_inicio_min"] + tick * paso
+        df_tick = tele[tele["tick"] == tick]
+        df_ped = estado_pedidos_en_tick(esc, t_sim)
+        layers = [capa_rutas(esc), capa_pedidos(df_ped), capa_hub(esc["hub"]),
+                  capa_vehiculos(df_tick), capa_etiquetas_vehiculos(df_tick)]
+        st.pydeck_chart(construir_deck(layers, esc["hub"]), use_container_width=True)
+        hora = f"{int(t_sim)//60:02d}:{int(t_sim)%60:02d}"
+        en_riesgo = int((df_ped["estado"] == "en_riesgo").sum())
+    else:
+        import streamlit.components.v1 as components
+        from geo.twin_component import html_gemelo
+        f1, f2 = st.columns([3, 1])
+        veh_sel = f1.selectbox("Vehiculo (incidencia)", esc["vehiculos"])
+        forzar = f2.button("Forzar incidencia", use_container_width=True)
+        components.html(html_gemelo(esc, altura=540), height=730, scrolling=False)
+        t_sim = float(esc["t_inicio_min"])
+        hora = "en vivo (mapa)"
+        en_riesgo = sum(1 for r in esc["rutas"].values() for p in r
+                        if float(p.get("iri", 0.0)) >= 0.61)
 
-    # --- Mapa PyDeck ---
-    df_tick = tele[tele["tick"] == tick]
-    df_ped = estado_pedidos_en_tick(esc, t_sim)
-    layers = [capa_rutas(esc), capa_pedidos(df_ped), capa_hub(esc["hub"]),
-              capa_vehiculos(df_tick), capa_etiquetas_vehiculos(df_tick)]
-    st.pydeck_chart(construir_deck(layers, esc["hub"]), use_container_width=True)
-    st.caption(f"Hora simulada: {int(t_sim)//60:02d}:{int(t_sim)%60:02d}  ·  "
-               f"tick {tick}/{max_tick}  ·  {len(esc['vehiculos'])} vehiculos  ·  "
-               f"{esc['n_pedidos']} pedidos")
-
-    # --- KPIs del tick ---
-    entregados = int((df_ped["estado"] == "entregado").sum())
-    en_riesgo = int((df_ped["estado"] == "en_riesgo").sum())
-    alertas = int(df_tick["alerta"].sum()) if not df_tick.empty else 0
+    # --- KPIs del escenario ---
     kpi_row([
-        {"label": "Entregados", "value": f"{entregados}/{len(df_ped)}",
-         "helptext": "Pedidos entregados hasta este instante simulado"},
-        {"label": "En riesgo", "value": str(en_riesgo),
+        {"label": "Pedidos", "value": str(esc["n_pedidos"])},
+        {"label": "En riesgo (IRI)", "value": str(en_riesgo),
          "helptext": "Pedidos con riesgo alto/critico de incumplir ventana"},
-        {"label": "Vehiculos con alerta", "value": str(alertas),
-         "helptext": "Vehiculos con retraso acumulado sobre el umbral"},
-        {"label": "Hora simulada", "value": f"{int(t_sim)//60:02d}:{int(t_sim)%60:02d}"},
+        {"label": "Vehiculos", "value": str(len(esc["vehiculos"]))},
+        {"label": "Reloj", "value": hora},
     ])
 
     # --- Replanificacion (incidencia) ---
     if forzar:
-        completadas_n = int((df_ped[(df_ped.vehiculo_id == veh_sel)]["eta_min"]
-                             + 0 <= t_sim).sum())  # aprox: paradas ya vencidas
+        completadas_n = int(sum(1 for p in esc["rutas"].get(veh_sel, [])
+                                if float(p["eta_min"]) <= t_sim))   # paradas ya vencidas
         res = replan_vehiculo_demo(esc, veh_sel, Parametros(tiempo_solver_seg=3),
                                    t_actual_rel_min=max(0.0, t_sim - esc["t_inicio_min"]),
                                    completadas_n=completadas_n, incidencia_factor=1.5)
