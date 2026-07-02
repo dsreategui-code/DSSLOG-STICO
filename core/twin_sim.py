@@ -55,17 +55,16 @@ def simular_incidencias(escenario: dict, *, tasa: float = 0.12, factor: float = 
     return esc, incidencias
 
 
-def mitigar_con_reruteo(escenario: dict) -> Tuple[dict, List[dict]]:
-    """Respuesta del cerebro a las alertas: re-secuencia los pendientes de cada vehiculo
-    con incidencia (regla EDD = ventana mas proxima primero) y aplica el nuevo orden SOLO si
-    reduce los incumplimientos/tardanza. Devuelve (escenario_mitigado, acciones_reruteo).
+def proponer_reruteo(escenario: dict) -> List[dict]:
+    """Genera PROPUESTAS de re-secuenciacion (sin aplicarlas): para cada vehiculo con una
+    incidencia, compara la ruta actual de sus pendientes contra el orden por ventana mas
+    proxima (EDD) y, SOLO si mejora los incumplimientos/tardanza, devuelve una propuesta con
+    su sustento. La decision (aprobar/mantener) queda en manos del usuario.
 
     Las paradas hasta la incidencia quedan fijas (ya en curso); se reordenan las siguientes.
     """
-    esc = copy.deepcopy(escenario)
-    hub_coord = (esc["hub"]["lat"], esc["hub"]["lon"])
-    acciones: List[dict] = []
-    for veh, paradas in esc["rutas"].items():
+    propuestas: List[dict] = []
+    for veh, paradas in escenario["rutas"].items():
         idx = next((i for i, p in enumerate(paradas) if p.get("incidencia")), None)
         if idx is None:
             continue
@@ -85,14 +84,64 @@ def mitigar_con_reruteo(escenario: dict) -> Tuple[dict, List[dict]]:
         _recomputar(cand, t0, pos0)
         k_cand = (_n_tarde(cand), _tardanza_total(cand))
 
-        if k_cand < k_base:
-            paradas[:] = fijas + cand
-            acciones.append({"vehiculo_id": veh,
-                             "recuperadas": int(k_base[0] - k_cand[0]),
-                             "tard_antes_min": round(k_base[1], 1),
-                             "tard_despues_min": round(k_cand[1], 1)})
+        if k_cand >= k_base:          # solo se propone si mejora
+            continue
+        inc = paradas[idx]
+        propuestas.append({
+            "vehiculo_id": veh,
+            "incidencia_hora": _hhmm(inc.get("t_incidencia") or inc["eta_min"]),
+            "incidencia_distrito": inc.get("distrito", "-"),
+            "incidencia_min": float(inc.get("incidencia_min", 0.0)),
+            "n_pendientes": len(pend),
+            "orden_actual": [p["pedido_id"] for p in base],
+            "orden_propuesto": [p["pedido_id"] for p in cand],
+            "tarde_actual": int(k_base[0]), "tarde_propuesto": int(k_cand[0]),
+            "tard_actual_min": round(k_base[1], 1),
+            "tard_propuesto_min": round(k_cand[1], 1),
+            "recuperadas": int(k_base[0] - k_cand[0]),
+            "reduccion_min": round(k_base[1] - k_cand[1], 1),
+        })
+    return propuestas
+
+
+def aplicar_propuestas(escenario: dict, propuestas: List[dict], aprobadas) -> dict:
+    """Aplica al escenario SOLO las propuestas cuyo vehiculo esta en ``aprobadas`` (iterable
+    de vehiculo_id). Reordena los pendientes segun el orden propuesto, recalcula ETAs, marca
+    alertas y reproyecta geometrias. Conserva todos los pedidos (custodia, sin transferencias).
+    """
+    aprobadas = set(aprobadas)
+    por_veh = {p["vehiculo_id"]: p for p in propuestas}
+    esc = copy.deepcopy(escenario)
+    for veh in aprobadas:
+        prop = por_veh.get(veh)
+        if prop is None or veh not in esc["rutas"]:
+            continue
+        paradas = esc["rutas"][veh]
+        idx = next((i for i, p in enumerate(paradas) if p.get("incidencia")), None)
+        if idx is None:
+            continue
+        fijas, pend = paradas[:idx + 1], paradas[idx + 1:]
+        pid_a_parada = {p["pedido_id"]: p for p in pend}
+        nuevo = [pid_a_parada[pid] for pid in prop["orden_propuesto"] if pid in pid_a_parada]
+        nuevo += [p for p in pend if p not in nuevo]      # salvaguarda: no perder paradas
+        ancla = fijas[-1]
+        t0 = float(ancla["eta_min"]) + float(ancla.get("servicio_min", 8.0)) \
+            + float(ancla.get("incidencia_min", 0.0))
+        _recomputar(nuevo, t0, ancla["coord"])
+        paradas[:] = fijas + nuevo
     _reproyectar_geometrias(esc)
     _marcar_alertas(esc)
+    return esc
+
+
+def mitigar_con_reruteo(escenario: dict) -> Tuple[dict, List[dict]]:
+    """Atajo programatico: propone y aplica TODAS las mejoras (usado en pruebas y modo batch).
+    En la UI la decision es del usuario (proponer_reruteo + aplicar_propuestas)."""
+    propuestas = proponer_reruteo(escenario)
+    esc = aplicar_propuestas(escenario, propuestas, [p["vehiculo_id"] for p in propuestas])
+    acciones = [{"vehiculo_id": p["vehiculo_id"], "recuperadas": p["recuperadas"],
+                 "tard_antes_min": p["tard_actual_min"],
+                 "tard_despues_min": p["tard_propuesto_min"]} for p in propuestas]
     return esc, acciones
 
 

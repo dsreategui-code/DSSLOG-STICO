@@ -15,8 +15,8 @@ from components.layout import render_view_title, render_divider, render_footer
 from components.cards import kpi_row
 from core.demo_scenario import construir_escenario_demo
 from core.telemetry import construir_telemetria, estado_pedidos_en_tick
-from core.twin_sim import (mitigar_con_reruteo, resumen_operacion, simular_incidencias,
-                           tabla_alertas, tabla_operacion)
+from core.twin_sim import (aplicar_propuestas, proponer_reruteo, resumen_operacion,
+                           simular_incidencias, tabla_alertas, tabla_operacion)
 from dashboards.risk_dashboard import fig_iri_clasificacion
 from dashboards.twin_dashboard import (fig_entregas_por_hora, fig_estado_final,
                                        fig_tardanza_por_vehiculo)
@@ -37,12 +37,70 @@ def _init():
     ss.setdefault("dt_veloc", "1x")
     ss.setdefault("dt_escenario", None)
     ss.setdefault("dt_bump", 0)
+    ss.setdefault("dt_sig", None)
+    ss.setdefault("dt_dec", {})
 
 
 def _escenario():
     if st.session_state.dt_escenario is None:
         st.session_state.dt_escenario = construir_escenario_demo(num_vehiculos=6)
     return st.session_state.dt_escenario
+
+
+def _orden_str(ids, k=6):
+    s = " → ".join(ids[:k])
+    return s + (f" … (+{len(ids) - k})" if len(ids) > k else "")
+
+
+def _decidir(veh, val):
+    st.session_state.dt_dec[veh] = val
+
+
+def _decidir_todas(veh_ids, val):
+    for v in veh_ids:
+        st.session_state.dt_dec[v] = val
+
+
+def _tarjeta_propuesta(p, dec):
+    """Tarjeta de decision: ruta actual vs re-secuenciada, con sustento y botones."""
+    veh = p["vehiculo_id"]
+    estado = dec.get(veh)
+    with st.container(border=True):
+        top = st.columns([3, 1])
+        top[0].markdown(f"**⚠ {veh} — {p['n_pendientes']} paradas pendientes en riesgo**")
+        badge = {"aprobada": "✓ Re-ruteo aprobado",
+                 "rechazada": "Ruta original mantenida"}.get(estado, "Pendiente de decision")
+        top[1].markdown(f"<div style='text-align:right;color:#475467;font-size:13px;'>"
+                        f"{badge}</div>", unsafe_allow_html=True)
+        st.caption(f"Incidencia {p['incidencia_hora']} en {p['incidencia_distrito']} "
+                   f"(+{p['incidencia_min']:.0f} min), que arrastra las paradas siguientes.")
+        ca, cb = st.columns(2)
+        with ca:
+            st.markdown("**Ruta actual**")
+            st.metric("Fuera de ventana", p["tarde_actual"])
+            st.metric("Tardanza acumulada", f"{p['tard_actual_min']:.0f} min")
+            st.caption("orden: " + _orden_str(p["orden_actual"]))
+        with cb:
+            st.markdown("**Ruta re-secuenciada (propuesta)**")
+            st.metric("Fuera de ventana", p["tarde_propuesto"],
+                      delta=(-p["recuperadas"] if p["recuperadas"] else None),
+                      delta_color="inverse")
+            st.metric("Tardanza acumulada", f"{p['tard_propuesto_min']:.0f} min",
+                      delta=(f"-{p['reduccion_min']:.0f} min" if p["reduccion_min"] > 0
+                             else None), delta_color="inverse")
+            st.caption("orden: " + _orden_str(p["orden_propuesto"]))
+        recup = (f"recupera **{p['recuperadas']}** entrega(s) y " if p["recuperadas"] > 0
+                 else "")
+        st.info(f"Sustento: reordenar priorizando la ventana mas proxima {recup}reduce la "
+                f"tardanza acumulada en **{p['reduccion_min']:.0f} min**, manteniendo los "
+                f"mismos pedidos (sin transferencias entre vehiculos).")
+        b1, b2 = st.columns(2)
+        b1.button("Aprobar re-ruteo", key=f"dt_ap_{veh}", type="primary",
+                  use_container_width=True, disabled=(estado == "aprobada"),
+                  on_click=_decidir, args=(veh, "aprobada"))
+        b2.button("Mantener ruta actual", key=f"dt_re_{veh}",
+                  use_container_width=True, disabled=(estado == "rechazada"),
+                  on_click=_decidir, args=(veh, "rechazada"))
 
 
 def render():
@@ -88,12 +146,7 @@ def render():
         st.session_state.dt_bump = int(st.session_state.dt_bump) + 1
     semilla = (int(semilla_base) + int(st.session_state.dt_bump)) % 10000
 
-    o1, o2 = st.columns([2.6, 2.4])
-    reruteo = o1.toggle(
-        "Re-ruteo automatico del cerebro ante alertas", value=True,
-        help="Cuando una incidencia dispara alertas, el cerebro re-secuencia los pendientes "
-             "de los vehiculos afectados (regla de ventana mas proxima) para recuperar OTD.")
-    modo_clasico = o2.checkbox(
+    modo_clasico = st.checkbox(
         "Mapa clasico por ticks (respaldo)", value=False,
         help="El mapa fluido se anima en el navegador sin recargar la pagina. Si no se "
              "visualiza bien, activa el mapa clasico.")
@@ -101,10 +154,16 @@ def render():
     # Inyeccion de incidencias aleatorias (reproducible con la semilla)
     esc_sin, incidencias = simular_incidencias(esc_base, tasa=intensidad / 100.0,
                                                seed=int(semilla))
-    if reruteo:
-        esc, acciones = mitigar_con_reruteo(esc_sin)
-    else:
-        esc, acciones = esc_sin, []
+    # Propuestas de re-ruteo (NO se aplican solas: las decide el usuario abajo)
+    propuestas = proponer_reruteo(esc_sin)
+    sig = f"{int(semilla)}:{int(intensidad)}"
+    if st.session_state.get("dt_sig") != sig:
+        st.session_state.dt_sig = sig
+        st.session_state.dt_dec = {}          # reset de decisiones si cambia la jornada
+    dec = st.session_state.setdefault("dt_dec", {})
+    aprobadas = [p["vehiculo_id"] for p in propuestas
+                 if dec.get(p["vehiculo_id"]) == "aprobada"]
+    esc = aplicar_propuestas(esc_sin, propuestas, aprobadas)
 
     tick, max_tick = 0, 0
     if modo_clasico:
@@ -139,44 +198,52 @@ def render():
                "la distancia base (haversine); al activar **OSRM local** las rutas siguen las "
                "calles reales. Las incidencias surgen de forma aleatoria segun la intensidad.")
 
-    # --- Alertas de la operacion (saltan con la cascada de incidencias) ---
+    # --- KPIs de la jornada (segun decisiones actuales del usuario) ---
     r = resumen_operacion(esc, incidencias)
     r_sin = resumen_operacion(esc_sin, incidencias)
-    recuperadas = sum(a["recuperadas"] for a in acciones)
-    min_reducidos = sum(a["tard_antes_min"] - a["tard_despues_min"] for a in acciones)
-    if r["alertas"] > 0:
-        base = (f"⚠ **{r['alertas']} alertas**: {r['incidencias']} incidencias ponen en "
-                f"riesgo de incumplir ventana a esas entregas.")
-        if reruteo and recuperadas > 0:
-            st.warning(base + f" El cerebro re-secuencio **{len(acciones)} vehiculo(s)** y "
-                       f"recupero **{recuperadas} entrega(s)** "
-                       f"(OTD {r_sin['otd']*100:.1f}% → {r['otd']*100:.1f}%).")
-        elif reruteo and acciones:
-            st.warning(base + f" El cerebro re-secuencio **{len(acciones)} vehiculo(s)** y "
-                       f"redujo la tardanza acumulada en **{min_reducidos:.0f} min**.")
-        elif reruteo:
-            st.warning(base + " El re-ruteo no encontro un reordenamiento que mejore (las "
-                       "ventanas ya no dan holgura).")
-        else:
-            st.warning(base + " Re-ruteo automatico **desactivado**: las alertas no se "
-                       "mitigan y el OTD cae.")
+    pendientes = [p for p in propuestas if dec.get(p["vehiculo_id"]) is None]
+    delta_otd = (r["otd"] - r_sin["otd"]) * 100
+    if pendientes:
+        st.warning(f"⚠ **{r['alertas']} alertas** activas · **{len(pendientes)} propuesta(s) "
+                   f"de re-ruteo** esperan tu decision mas abajo.")
+    elif propuestas:
+        st.success(f"Decisiones aplicadas: OTD {r_sin['otd']*100:.1f}% → "
+                   f"**{r['otd']*100:.1f}%** ({len(aprobadas)}/{len(propuestas)} "
+                   f"propuestas aprobadas).")
+    elif r["alertas"] > 0:
+        st.warning(f"⚠ **{r['alertas']} alertas**, pero el re-ruteo no halla un reordenamiento "
+                   f"que mejore (las ventanas ya no dan holgura).")
     else:
         st.success("Sin alertas: todas las entregas proyectadas dentro de ventana.")
 
-    # --- KPIs de la jornada ---
-    delta_otd = (r["otd"] - r_sin["otd"]) * 100
     kpi_row([
         {"label": "OTD simulado", "value": f"{r['otd'] * 100:.1f}%",
-         "delta": (f"{delta_otd:+.1f} pts vs sin re-ruteo" if reruteo and abs(delta_otd) > 1e-9
+         "delta": (f"{delta_otd:+.1f} pts vs base" if aprobadas and abs(delta_otd) > 1e-9
                    else None),
          "delta_dir": "up" if delta_otd > 1e-9 else "flat",
-         "helptext": "Entregas dentro de ventana en esta jornada simulada"},
+         "helptext": "Entregas dentro de ventana con las decisiones aplicadas"},
         {"label": "Alertas", "value": str(r["alertas"]),
          "helptext": "Entregas que la cascada de incidencias pone en riesgo de incumplir ventana"},
         {"label": "Incidencias", "value": str(r["incidencias"]),
          "helptext": "Eventos aleatorios ocurridos en la jornada"},
         {"label": "Tardanza maxima", "value": f"{r['tardanza_max_min']:.0f} min"},
     ])
+
+    # --- Tarjetas de alerta: propuesta de re-ruteo con sustento (decide el usuario) ---
+    if propuestas:
+        render_divider()
+        hc1, hc2 = st.columns([3, 2])
+        hc1.markdown("#### Alertas con propuesta de re-ruteo")
+        gb1, gb2 = hc2.columns(2)
+        veh_ids = [p["vehiculo_id"] for p in propuestas]
+        gb1.button("Aprobar todas", use_container_width=True,
+                   on_click=_decidir_todas, args=(veh_ids, "aprobada"))
+        gb2.button("Mantener todas", use_container_width=True,
+                   on_click=_decidir_todas, args=(veh_ids, "rechazada"))
+        st.caption("El cerebro propone; **la decision es tuya**. Cada tarjeta compara la ruta "
+                   "actual del vehiculo contra la re-secuenciada por ventana mas proxima.")
+        for p in propuestas:
+            _tarjeta_propuesta(p, dec)
 
     # --- Dashboards de resultados de la operacion ---
     render_divider()

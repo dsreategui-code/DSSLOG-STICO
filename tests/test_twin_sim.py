@@ -1,7 +1,8 @@
 """Pruebas del gemelo operativo: incidencias aleatorias, alertas dinamicas y re-ruteo."""
 from core.demo_scenario import construir_escenario_demo
-from core.twin_sim import (mitigar_con_reruteo, resumen_operacion, simular_incidencias,
-                           tabla_alertas, tabla_operacion)
+from core.twin_sim import (aplicar_propuestas, mitigar_con_reruteo, proponer_reruteo,
+                           resumen_operacion, simular_incidencias, tabla_alertas,
+                           tabla_operacion)
 
 
 def _esc():
@@ -40,6 +41,34 @@ def test_reruteo_nunca_empeora_y_puede_recuperar():
     for a in acc:                                       # cada accion mejora (o iguala)
         assert a["tard_despues_min"] <= a["tard_antes_min"]
         assert a["recuperadas"] >= 0
+
+
+def test_proponer_no_muta_y_aplicar_solo_lo_aprobado():
+    esc_sin, _ = simular_incidencias(_esc(), tasa=0.22, seed=9)
+    antes = [(v, [p["pedido_id"] for p in r]) for v, r in esc_sin["rutas"].items()]
+    props = proponer_reruteo(esc_sin)
+    # proponer no debe mutar el escenario base
+    despues = [(v, [p["pedido_id"] for p in r]) for v, r in esc_sin["rutas"].items()]
+    assert antes == despues
+    # aplicar sin aprobaciones = escenario base (mismas ETAs)
+    esc0 = aplicar_propuestas(esc_sin, props, [])
+    r0 = resumen_operacion(esc0)
+    rb = resumen_operacion(esc_sin)
+    assert abs(r0["otd"] - rb["otd"]) < 1e-9
+    # aprobar todas = mismo OTD que el atajo mitigar_con_reruteo
+    if props:
+        esc_all = aplicar_propuestas(esc_sin, props, [p["vehiculo_id"] for p in props])
+        esc_mit, _ = mitigar_con_reruteo(esc_sin)
+        assert abs(resumen_operacion(esc_all)["otd"]
+                   - resumen_operacion(esc_mit)["otd"]) < 1e-9
+
+
+def test_propuesta_siempre_mejora():
+    esc_sin, _ = simular_incidencias(_esc(), tasa=0.25, seed=4)
+    for p in proponer_reruteo(esc_sin):
+        assert (p["tarde_propuesto"], p["tard_propuesto_min"]) \
+            <= (p["tarde_actual"], p["tard_actual_min"])
+        assert p["orden_propuesto"] != p["orden_actual"] or p["reduccion_min"] > 0
 
 
 def test_reruteo_conserva_todos_los_pedidos():
