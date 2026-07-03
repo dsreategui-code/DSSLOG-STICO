@@ -32,6 +32,8 @@ VISTA_BENCHMARK = "benchmark"
 VISTA_DIGITAL_TWIN = "digital_twin"
 # Planificacion CORTEX-LM (pipeline completo).
 VISTA_PLANNING = "planning"
+# Flujo guiado de Demostracion (5 pasos: datos -> parametros -> motor -> gemelo -> export).
+VISTA_DEMO_FLOW = "demo_flow"
 
 # Zonas operativas
 ZONAS_OPERATIVAS = [

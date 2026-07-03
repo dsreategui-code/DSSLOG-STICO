@@ -4,7 +4,7 @@ from components.layout import render_view_title, render_divider, render_footer
 from components.cards import info_card, feature_card
 from utils.constants import (
     MODO_VALIDACION, MODO_DEMOSTRACION,
-    VISTA_VALIDATION_DATA, VISTA_DEMO_ROLE_SELECTION, VISTA_BENCHMARK,
+    VISTA_VALIDATION_DATA, VISTA_DEMO_FLOW, VISTA_BENCHMARK,
 )
 
 
@@ -52,7 +52,8 @@ def render():
                      type="primary", use_container_width=True):
             st.session_state.modo = MODO_DEMOSTRACION
             st.session_state.rol = None
-            st.session_state.vista = VISTA_DEMO_ROLE_SELECTION
+            st.session_state.df_step = 1
+            st.session_state.vista = VISTA_DEMO_FLOW
             st.rerun()
 
     render_divider()

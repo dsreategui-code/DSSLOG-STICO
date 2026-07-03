@@ -14,7 +14,7 @@ from utils.constants import (
     VISTA_DEMO_ROLE_SELECTION, VISTA_SUPERVISOR_DATA, VISTA_SUPERVISOR_CONFIG,
     VISTA_SUPERVISOR_ROUTES, VISTA_SUPERVISOR_SIMULATION, VISTA_SUPERVISOR_ALERTS,
     VISTA_SUPERVISOR_RESULTS, VISTA_SUPERVISOR_EXPORT, VISTA_DRIVER,
-    VISTA_BENCHMARK, VISTA_DIGITAL_TWIN, VISTA_PLANNING,
+    VISTA_BENCHMARK, VISTA_DIGITAL_TWIN, VISTA_PLANNING, VISTA_DEMO_FLOW,
 )
 
 from views import home as v_home
@@ -35,6 +35,7 @@ from views import driver_view as v_driver
 from views import benchmark_svrpbench as v_bench
 from views import digital_twin_view as v_twin
 from views import planning_view as v_plan
+from views import demo_flow as v_flow
 
 
 ROUTES = {
@@ -43,6 +44,7 @@ ROUTES = {
     VISTA_BENCHMARK: v_bench.render,
     VISTA_DIGITAL_TWIN: v_twin.render,
     VISTA_PLANNING: v_plan.render,
+    VISTA_DEMO_FLOW: v_flow.render,
 
     VISTA_VALIDATION_DATA: v_val_data.render,
     VISTA_VALIDATION_CONFIG: v_val_cfg.render,

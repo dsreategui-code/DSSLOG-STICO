@@ -49,6 +49,70 @@ def fig_tardanza_por_vehiculo(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def fig_otd_otif_camion(tc: pd.DataFrame) -> go.Figure:
+    """OTD y OTIF por vehiculo (barras agrupadas, %)."""
+    fig = go.Figure()
+    if tc is None or tc.empty:
+        fig.update_layout(**_base_layout("OTD / OTIF por vehiculo"))
+        return fig
+    fig.add_bar(x=tc["vehiculo_id"], y=(tc["otd"] * 100).round(1), name="OTD %",
+                marker_color="#1570EF")
+    fig.add_bar(x=tc["vehiculo_id"], y=(tc["otif"] * 100).round(1), name="OTIF %",
+                marker_color="#0D9488")
+    fig.update_layout(barmode="group",
+                      **_base_layout("OTD / OTIF por vehiculo", height=320))
+    fig.update_yaxes(title="%", range=[0, 105])
+    return fig
+
+
+def fig_incidencias_por_tipo(agregados: dict) -> go.Figure:
+    """Incidencias por tipo/causa (barras horizontales)."""
+    fig = go.Figure()
+    pt = (agregados or {}).get("por_tipo")
+    if pt is None or pt.empty:
+        fig.update_layout(**_base_layout("Incidencias por tipo"))
+        return fig
+    pt = pt.sort_values("n")
+    fig = go.Figure(go.Bar(x=pt["n"], y=pt["descripcion"], orientation="h",
+                           marker_color="#B54708",
+                           text=pt["n"], textposition="outside"))
+    fig.update_layout(**_base_layout("Incidencias por tipo/causa", height=300))
+    fig.update_xaxes(title="nº incidencias")
+    return fig
+
+
+def fig_incidencias_por_franja(agregados: dict) -> go.Figure:
+    """Incidencias por franja horaria."""
+    fig = go.Figure()
+    pf = (agregados or {}).get("por_franja")
+    if pf is None or pf.empty:
+        fig.update_layout(**_base_layout("Incidencias por franja"))
+        return fig
+    orden = ["mañana", "mediodia", "tarde"]
+    pf = pf.set_index("franja").reindex(orden).fillna(0).reset_index()
+    fig = go.Figure(go.Bar(x=pf["franja"], y=pf["n"], marker_color="#7F56D9",
+                           text=pf["n"].astype(int), textposition="outside"))
+    fig.update_layout(**_base_layout("Incidencias por franja horaria", height=300))
+    fig.update_yaxes(title="nº incidencias")
+    return fig
+
+
+def fig_variabilidad(var_info: dict) -> go.Figure:
+    """Distribucion del OTD entre corridas (menor dispersion = operacion mas consistente)."""
+    fig = go.Figure()
+    muestras = (var_info or {}).get("muestras") or []
+    if not muestras:
+        fig.update_layout(**_base_layout("Variabilidad del OTD"))
+        return fig
+    fig.add_trace(go.Box(y=[m * 100 for m in muestras], name="OTD", boxmean="sd",
+                         marker_color="#1570EF"))
+    fig.update_layout(**_base_layout(
+        f"Variabilidad del OTD ({var_info.get('n', 0)} corridas · σ="
+        f"{var_info.get('otd_std', 0) * 100:.1f} pts)", height=320))
+    fig.update_yaxes(title="OTD (%)", range=[0, 105])
+    return fig
+
+
 def fig_estado_final(df: pd.DataFrame) -> go.Figure:
     """Dona: reparto final de pedidos a tiempo / tardios / con incidencia."""
     fig = go.Figure()
