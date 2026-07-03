@@ -24,7 +24,7 @@ from geo.pydeck_layers import (capa_etiquetas_vehiculos, capa_hub, capa_pedidos,
                                capa_rutas, capa_vehiculos, construir_deck)
 from geo.twin_component import html_gemelo
 from services.data_loader import dataset_exists, generar_dataset_demo
-from utils.constants import VISTA_HOME
+from utils.constants import VISTA_DEMO_ROLE_SELECTION
 
 VELOCIDADES = {"0.5x": 1.2, "1x": 0.6, "2x": 0.3, "4x": 0.12}
 
@@ -125,8 +125,8 @@ def render():
             else:
                 st.error("No se pudo generar el dataset.")
         render_divider()
-        if st.button("Volver al inicio", key="dt_nodata_back"):
-            st.session_state.vista = VISTA_HOME
+        if st.button("Volver a Demostracion", key="dt_nodata_back"):
+            st.session_state.vista = VISTA_DEMO_ROLE_SELECTION
             st.rerun()
         render_footer()
         return
@@ -323,9 +323,9 @@ def render():
         st.caption("Sin incidencias en esta jornada (sube la intensidad o cambia la semilla).")
 
     render_divider()
-    if st.button("Volver al inicio", key="dt_back"):
+    if st.button("Volver a Demostracion", key="dt_back"):
         st.session_state.dt_play = False
-        st.session_state.vista = VISTA_HOME
+        st.session_state.vista = VISTA_DEMO_ROLE_SELECTION
         st.rerun()
     render_footer()
 

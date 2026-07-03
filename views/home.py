@@ -1,11 +1,10 @@
-"""Pantalla inicial - seleccion de modo."""
+"""Pantalla inicial - tres pilares: Validacion, Demostracion, Benchmark."""
 import streamlit as st
 from components.layout import render_view_title, render_divider, render_footer
 from components.cards import info_card, feature_card
 from utils.constants import (
     MODO_VALIDACION, MODO_DEMOSTRACION,
-    VISTA_VALIDATION_DATA, VISTA_DEMO_ROLE_SELECTION, VISTA_BENCHMARK, VISTA_DIGITAL_TWIN,
-    VISTA_PLANNING,
+    VISTA_VALIDATION_DATA, VISTA_DEMO_ROLE_SELECTION, VISTA_BENCHMARK,
 )
 
 
@@ -41,11 +40,12 @@ def render():
     with col2:
         feature_card(
             eyebrow="02  /  Demostracion interactiva",
-            title="Recorrido del DSS",
+            title="Operacion en vivo (gemelo + motor)",
             description=(
-                "Opera el sistema como Supervisor para gestionar la jornada completa "
-                "o como Conductor para consultar tu ruta asignada y los enlaces de navegacion. "
-                "Toma decisiones reales sobre las replanificaciones intravehiculo."
+                "Observa la operacion en el Gemelo Digital: mapa animado en vivo, incidencias "
+                "aleatorias y decisiones de re-ruteo por vehiculo. Detras corre el Motor de "
+                "Decision (planificacion con robustez DRO, candidatas e IRI). Incluye tambien "
+                "el recorrido operativo por roles (Supervisor / Conductor)."
             ),
         )
         if st.button("Ingresar a demostracion", key="home_demo",
@@ -67,7 +67,7 @@ def render():
         )
     with col_b:
         info_card(
-            "Logica del DSS",
+            "Motor de decision (transversal)",
             "Optimizacion inicial de rutas, simulacion estocastica de la jornada y "
             "replanificacion intravehiculo de pedidos pendientes sin reasignacion entre flotas.",
             eyebrow="Modelo",
@@ -96,40 +96,5 @@ def render():
         st.session_state.rol = None
         st.session_state.vista = VISTA_BENCHMARK
         st.rerun()
-
-    st.write("")
-    cor1, cor2 = st.columns(2, gap="large")
-    with cor1:
-        feature_card(
-            eyebrow="04  /  Planificacion CORTEX-LM",
-            title="Motor de decision",
-            description=(
-                "Genera rutas candidatas por perfil de decision, las evalua por simulacion "
-                "estocastica (OTD, IRI, riesgo) y recomienda una de forma explicable. Matriz "
-                "contextual de Lima sobre OSRM. Envia el resultado al gemelo digital."
-            ),
-        )
-        if st.button("Abrir planificacion", key="home_plan",
-                     type="secondary", use_container_width=True):
-            st.session_state.modo = None
-            st.session_state.rol = None
-            st.session_state.vista = VISTA_PLANNING
-            st.rerun()
-    with cor2:
-        feature_card(
-            eyebrow="05  /  Gemelo Digital Operativo",
-            title="Vista PyDeck",
-            description=(
-                "Reconstruccion simulada de la jornada en mapa PyDeck: rutas, vehiculos en "
-                "movimiento por ticks, estado de pedidos, incidencias y replanificacion "
-                "intra-vehiculo. Gemelo operativo simulado."
-            ),
-        )
-        if st.button("Abrir gemelo digital", key="home_twin",
-                     type="secondary", use_container_width=True):
-            st.session_state.modo = None
-            st.session_state.rol = None
-            st.session_state.vista = VISTA_DIGITAL_TWIN
-            st.rerun()
 
     render_footer()

@@ -15,7 +15,7 @@ from dashboards.risk_dashboard import (es_robusto, fig_iri_clasificacion,
                                        fig_ranking_robusto, fig_robustez_por_escenario)
 from services.cortex_loader import cargar_contexto
 from services.data_loader import dataset_exists, generar_dataset_demo
-from utils.constants import VISTA_DIGITAL_TWIN, VISTA_HOME
+from utils.constants import VISTA_DIGITAL_TWIN, VISTA_DEMO_ROLE_SELECTION
 
 
 def _guard_dataset() -> bool:
@@ -31,8 +31,8 @@ def _guard_dataset() -> bool:
         else:
             st.error("No se pudo generar el dataset (revisa generar_dataset_sintetico.py).")
     render_divider()
-    if st.button("Volver al inicio", key="plan_nodata_back"):
-        st.session_state.vista = VISTA_HOME
+    if st.button("Volver a Demostracion", key="plan_nodata_back"):
+        st.session_state.vista = VISTA_DEMO_ROLE_SELECTION
         st.rerun()
     render_footer()
     return True
@@ -77,8 +77,8 @@ def render():
     if not res:
         st.info("Configura los parametros y pulsa **Planificar** para generar la propuesta.")
         render_divider()
-        if st.button("Volver al inicio", key="plan_back0"):
-            st.session_state.vista = VISTA_HOME
+        if st.button("Volver a Demostracion", key="plan_back0"):
+            st.session_state.vista = VISTA_DEMO_ROLE_SELECTION
             st.rerun()
         render_footer()
         return
@@ -89,8 +89,8 @@ def render():
         for c in res["factibilidad"]["errores"]:
             st.write(f"- **{c['nombre']}**: {c['detalle']}")
         render_divider()
-        if st.button("Volver al inicio", key="plan_back1"):
-            st.session_state.vista = VISTA_HOME
+        if st.button("Volver a Demostracion", key="plan_back1"):
+            st.session_state.vista = VISTA_DEMO_ROLE_SELECTION
             st.rerun()
         render_footer()
         return
@@ -176,7 +176,7 @@ def render():
                        file_name="cortex_iri.csv", mime="text/csv", use_container_width=True)
 
     render_divider()
-    if st.button("Volver al inicio", key="plan_back2"):
-        st.session_state.vista = VISTA_HOME
+    if st.button("Volver a Demostracion", key="plan_back2"):
+        st.session_state.vista = VISTA_DEMO_ROLE_SELECTION
         st.rerun()
     render_footer()
