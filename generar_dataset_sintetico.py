@@ -66,11 +66,13 @@ MODELOS = [
 ]
 
 # tipo_servicio, tiempo_base_min, peso_para_eleccion
+# Tiempos realistas de ultima milla de productos grandes (colchones/camas): descarga, acarreo,
+# posicionamiento y firma toman mas que una entrega ligera; subida e instalacion, aun mas.
 TIPOS_SERVICIO = [
-    ("Estandar",                8,  0.45),
-    ("Instalacion",            25,  0.20),
-    ("Subida a departamento", 18,  0.25),
-    ("Atencion especial",     30,  0.10),
+    ("Estandar",               14,  0.45),
+    ("Instalacion",            40,  0.20),
+    ("Subida a departamento", 28,  0.25),
+    ("Atencion especial",     45,  0.10),
 ]
 
 PERFILES_TRAFICO = [

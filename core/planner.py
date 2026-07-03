@@ -17,7 +17,7 @@ from typing import Optional
 
 import numpy as np
 
-from config.cortex_settings import VELOCIDAD_RESPALDO_KMH
+from config.cortex_settings import FACTOR_CIRCUITO, VELOCIDAD_RESPALDO_KMH
 from core.candidate_generator import generar_candidatas, preparar_modelo
 from core.contextual_matrix import construir_matriz_contextual, construir_nodos
 from core.feasibility import verificar
@@ -43,7 +43,7 @@ def _matrices_haversine(coords, velocidad_kmh: float):
     for i in range(n):
         for j in range(n):
             if i != j:
-                km = _haversine_km(coords[i], coords[j])
+                km = _haversine_km(coords[i], coords[j]) * FACTOR_CIRCUITO   # distancia por calle aprox.
                 d[i][j] = km
                 t[i][j] = km / max(velocidad_kmh, 1.0) * 60.0
     return t, d

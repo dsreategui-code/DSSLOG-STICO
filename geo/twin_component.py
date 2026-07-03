@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 
+from config.cortex_settings import FACTOR_CIRCUITO
 from core.demo_scenario import VELOCIDAD_KMH
 from core.twin_sim import MARGEN_RIESGO_MIN, _franja, _hhmm, proponer_reruteo
 
@@ -82,7 +83,8 @@ def _datos_gemelo(escenario: dict) -> dict:
         alerta = bool(inc_idx >= 0 and (card is not None or alta))
         vehiculos.append({"veh": veh, "stops": stops, "incIdx": inc_idx, "alerta": bool(alerta),
                           "ordenProp": orden_prop, "card": card, "inc": inc_info})
-    return {"hub": hub, "t0": t0, "speed": float(VELOCIDAD_KMH), "vehiculos": vehiculos,
+    return {"hub": hub, "t0": t0, "speed": float(VELOCIDAD_KMH),
+            "circuito": float(FACTOR_CIRCUITO), "vehiculos": vehiculos,
             "colores": VEHCOL, "view": _fit_view(lons, lats)}
 
 
@@ -146,9 +148,9 @@ _PLANTILLA = r"""
     function recalc(v){
       var t=DATA.t0,prev=DATA.hub,arr=[],dep=[],arrOf={};
       for(var k=0;k<v.order.length;k++){var s=v.stops[v.order[k]];
-        t+=hav(prev,s)/DATA.speed*60;arr[k]=t;arrOf[v.order[k]]=t;
+        t+=hav(prev,s)*DATA.circuito/DATA.speed*60;arr[k]=t;arrOf[v.order[k]]=t;
         t+=s.serv+s.incMin;dep[k]=t;prev=s;}
-      t+=hav(prev,DATA.hub)/DATA.speed*60;
+      t+=hav(prev,DATA.hub)*DATA.circuito/DATA.speed*60;
       v.arr=arr;v.dep=dep;v.arrOf=arrOf;v.total=t;
       if(v.tInc===null&&v.incIdx>=0){var pos=v.order.indexOf(v.incIdx);v.tInc=(pos>=0?arr[pos]:-1);}
     }

@@ -21,6 +21,7 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 
+from config.cortex_settings import FACTOR_CIRCUITO
 from core.risk_engine import UMBRAL_RIESGO, clasificar_iri
 
 MARGEN_ALERTA_MIN = 20.0   # antelacion con que salta una alerta sin incidencia previa
@@ -45,13 +46,14 @@ SEV_ORDEN = {"baja": 0, "media": 1, "alta": 2}
 
 
 def simular_incidencias(escenario: dict, *, tasa: float = 0.12, seed: int = 7,
+                        mult_retraso: float = 1.0,
                         catalogo: Optional[list] = None) -> Tuple[dict, List[dict]]:
     """Devuelve (escenario_con_incidencias, lista_incidencias).
 
     Para cada parada, con probabilidad ``tasa`` ocurre una incidencia de un ``tipo`` sorteado
-    del catalogo (por peso); agrega un retraso que se PROPAGA a las paradas posteriores del
-    mismo vehiculo (cascada). Si el tipo es ausencia, la entrega falla en primer intento
-    (afecta OTIF). Con la misma ``seed`` la jornada es identica (reproducible).
+    del catalogo (por peso); agrega un retraso (escalado por ``mult_retraso``, p. ej. un dia
+    critico) que se PROPAGA a las paradas posteriores del mismo vehiculo (cascada). Si el tipo
+    es ausencia, la entrega falla en primer intento (afecta OTIF). Reproducible con ``seed``.
     """
     cat = catalogo or CATALOGO_INCIDENCIAS
     tipos = [c["tipo"] for c in cat]
@@ -67,7 +69,7 @@ def simular_incidencias(escenario: dict, *, tasa: float = 0.12, seed: int = 7,
             p["eta_min"] = round(base_eta, 1)
             if rng.random() < float(tasa):
                 c = por_tipo[rng.choices(tipos, weights=pesos, k=1)[0]]
-                extra = round(rng.uniform(c["dmin"], c["dmax"]), 1)
+                extra = round(rng.uniform(c["dmin"], c["dmax"]) * float(mult_retraso), 1)
                 p["incidencia"] = True
                 p["incidencia_min"] = extra
                 p["incidencia_tipo"] = c["tipo"]
@@ -346,7 +348,8 @@ def comparar_rutas(esc_inicial: dict, esc_final: dict) -> pd.DataFrame:
 
 
 def variabilidad_operacion(escenario_base: dict, *, tasa: float = 0.12,
-                           n_corridas: int = 25, seed: int = 0) -> dict:
+                           mult_retraso: float = 1.0, n_corridas: int = 25,
+                           seed: int = 0) -> dict:
     """Variabilidad de la operacion: corre la jornada con incidencias sobre N semillas y mide
     la DISPERSION del OTD (objetivo del DSS: menor variabilidad = servicio mas consistente).
 
@@ -354,7 +357,8 @@ def variabilidad_operacion(escenario_base: dict, *, tasa: float = 0.12,
     """
     otds = []
     for s in range(int(n_corridas)):
-        esc_s, _ = simular_incidencias(escenario_base, tasa=tasa, seed=seed + s)
+        esc_s, _ = simular_incidencias(escenario_base, tasa=tasa, seed=seed + s,
+                                       mult_retraso=mult_retraso)
         otds.append(resumen_operacion(esc_s)["otd"])
     if not otds:
         return {"otd_medio": 0.0, "otd_std": 0.0, "cv": 0.0, "n": 0, "muestras": []}
@@ -392,7 +396,7 @@ def _recomputar(paradas: list, t_start: float, pos_start) -> None:
     from core.demo_scenario import VELOCIDAD_KMH, _haversine_km
     t, prev = float(t_start), pos_start
     for p in paradas:
-        t += _haversine_km(prev, p["coord"]) / VELOCIDAD_KMH * 60.0
+        t += _haversine_km(prev, p["coord"]) * FACTOR_CIRCUITO / VELOCIDAD_KMH * 60.0
         p["eta_min"] = round(t, 1)
         p["tardanza_min"] = round(max(0.0, t - float(p["ventana_fin_min"])), 1)
         t += float(p.get("servicio_min", 8.0)) + float(p.get("incidencia_min", 0.0))
@@ -424,7 +428,7 @@ def _moore_orden(pend: list, t0: float, pos0) -> list:
     edd = sorted(pend, key=lambda x: float(x["ventana_fin_min"]))
     proc, prev = {}, pos0
     for p in edd:
-        proc[id(p)] = (_haversine_km(prev, p["coord"]) / VELOCIDAD_KMH * 60.0
+        proc[id(p)] = (_haversine_km(prev, p["coord"]) * FACTOR_CIRCUITO / VELOCIDAD_KMH * 60.0
                        + float(p.get("servicio_min", 8.0)) + float(p.get("incidencia_min", 0.0)))
         prev = p["coord"]
     sched, deferred, t = [], [], float(t0)

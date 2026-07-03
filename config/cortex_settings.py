@@ -27,6 +27,10 @@ OSRM_TIMEOUT_S = 30
 # Velocidad de respaldo (km/h) SOLO para construir una matriz aproximada cuando no hay
 # OSRM ni cache y el usuario lo autoriza explicitamente (modo degradado, documentado).
 VELOCIDAD_RESPALDO_KMH = 18.0
+# Factor de circuito (rodeo): la distancia real por calle es mayor que la linea recta
+# (haversine). ~1.4 es tipico en malla urbana. Aproxima OSRM cuando no esta disponible;
+# con OSRM real este factor no se usa (la geometria de calle ya es exacta).
+FACTOR_CIRCUITO = float(os.environ.get("FACTOR_CIRCUITO", "1.4"))
 
 # --- Plantillas de entrada nuevas del motor (ver data/plantillas) ---
 PLANTILLAS_DIR = DATA_DIR / "plantillas"

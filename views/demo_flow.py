@@ -33,6 +33,14 @@ from utils.constants import VISTA_HOME
 PASOS = ["Datos", "Parametros", "Rutas iniciales", "Gemelo Digital", "Exportacion"]
 PLOT_CFG = {"displayModeBar": False}
 
+# Condicion de la jornada -> (tasa de incidencias, multiplicador de retraso). El plan robusto
+# absorbe un dia normal; en un dia critico (paros/lluvia/accidentes) el re-ruteo demuestra valor.
+CONDICIONES = {
+    "Normal": (0.12, 1.0),
+    "Dia dificil": (0.25, 1.8),
+    "Dia critico (paros / lluvia)": (0.45, 3.5),
+}
+
 
 def _init():
     ss = st.session_state
@@ -126,9 +134,10 @@ def _paso_params():
                "(DRO) de forma intrinseca, y ya incorpora los **tiempos de servicio** por tipo "
                "de pedido (estandar 8, subida 18, instalacion 25 min) desde el dataset.")
     c1, c2, c3 = st.columns(3)
-    n_plan = c1.slider("Tamano de la jornada (nº pedidos)", 4, n_total, min(40, n_total),
+    n_plan = c1.slider("Tamano de la jornada (nº pedidos)", 4, n_total, min(60, n_total),
                        key="df_nplan", help="Cuantos pedidos entran a la jornada. Mas pedidos = "
-                       "operacion mas realista (y planificacion algo mas lenta).")
+                       "rutas mas tensas y operacion mas realista (y planificacion algo mas "
+                       "lenta). Con mas pedidos, el re-ruteo del dia critico se aprecia mejor.")
     fechas = ["(sin evento)"] + sorted({e.fecha for e in ctx["eventos"]})
     fecha = c2.selectbox("Fecha (calendario de eventos)", fechas, key="df_fecha",
                          help="Los eventos (campanas, feriados) ajustan el trafico esperado.")
@@ -319,10 +328,10 @@ def _paso_motor():
 
 
 # ------------------------------------------------------------------ Paso 4: Gemelo
-def _resultados(esc_ini, esc_inc, esc_fin, incidencias):
+def _resultados(esc_ini, esc_inc, esc_fin, incidencias, tasa, mult):
     r_inc = resumen_operacion(esc_inc, incidencias)
     r_fin = resumen_operacion(esc_fin, incidencias)
-    var = variabilidad_operacion(esc_ini, tasa=st.session_state.df_tasa / 100.0,
+    var = variabilidad_operacion(esc_ini, tasa=tasa, mult_retraso=mult,
                                  n_corridas=25, seed=0)
     tab_g, tab_c, tab_i, tab_cmp = st.tabs(
         ["Generales", "Por camion", "Incidencias", "Inicial vs final"])
@@ -411,22 +420,28 @@ def _paso_gemelo():
         _nav(siguiente_label=None)
         return
 
-    c1, c2, c3 = st.columns([2.4, 1.2, 1.4])
-    st.session_state.df_tasa = c1.slider("Intensidad de incidencias (%)", 0, 40,
-                                         int(st.session_state.df_tasa), key="df_int")
+    c1, c2 = st.columns([2.6, 1.4])
+    cond = c1.selectbox(
+        "Condicion de la jornada", list(CONDICIONES.keys()), key="df_cond",
+        help="Normal: el plan robusto (DRO) absorbe las incidencias. Dia critico: cascada de "
+             "incidencias severas (paros, lluvia, accidentes) que estresa el plan y activa el "
+             "re-ruteo del cerebro.")
+    tasa, mult = CONDICIONES[cond]
     st.session_state.df_seed = c2.number_input("Semilla", 0, 9999, int(st.session_state.df_seed),
                                                key="df_seedin")
-    st.caption(f"Candidata en operacion: **{perfil}**  ·  gemelo simulado, no tiempo real.")
+    st.caption(f"Candidata en operacion: **{perfil}**  ·  incidencias {int(tasa*100)}% "
+               f"(retraso x{mult:g})  ·  viaje con factor de circuito (aprox. calle sin OSRM)  "
+               f"·  gemelo simulado, no tiempo real.")
 
     esc_inc, incidencias = simular_incidencias(
-        esc_ini, tasa=st.session_state.df_tasa / 100.0, seed=int(st.session_state.df_seed))
+        esc_ini, tasa=tasa, seed=int(st.session_state.df_seed), mult_retraso=mult)
     esc_fin, _ = mitigar_con_reruteo(esc_inc)
 
     tab_op, tab_res = st.tabs(["Operacion (en vivo)", "Resultados"])
     with tab_op:
-        components.html(html_gemelo(esc_inc, altura=460), height=900, scrolling=False)
+        components.html(html_gemelo(esc_inc, altura=460), height=980, scrolling=False)
     with tab_res:
-        _resultados(esc_ini, esc_inc, esc_fin, incidencias)
+        _resultados(esc_ini, esc_inc, esc_fin, incidencias, tasa, mult)
 
     st.session_state["df_esc_export"] = {"ini": esc_inc, "fin": esc_fin, "inc": incidencias}
     render_divider()
