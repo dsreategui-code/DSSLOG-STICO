@@ -21,7 +21,22 @@ for _d in (CACHE_DIR, OSRM_CACHE_DIR):
 # Se puede sobrescribir con la variable de entorno OSRM_BASE_URL.
 import os
 
-OSRM_BASE_URL = os.environ.get("OSRM_BASE_URL", "http://localhost:5000")
+def _leer_osrm_url() -> str:
+    """Endpoint de OSRM. Prioridad: variable de entorno OSRM_BASE_URL -> secrets de Streamlit
+    (para Streamlit Community Cloud, donde se define OSRM_BASE_URL en Secrets) -> localhost."""
+    v = os.environ.get("OSRM_BASE_URL")
+    if v:
+        return v
+    try:
+        import streamlit as st
+        if "OSRM_BASE_URL" in st.secrets:
+            return str(st.secrets["OSRM_BASE_URL"])
+    except Exception:  # noqa: BLE001  (sin runtime de Streamlit / sin secrets)
+        pass
+    return "http://localhost:5000"
+
+
+OSRM_BASE_URL = _leer_osrm_url()
 OSRM_PROFILE = os.environ.get("OSRM_PROFILE", "driving")
 OSRM_TIMEOUT_S = 30
 # Velocidad de respaldo (km/h) SOLO para construir una matriz aproximada cuando no hay
