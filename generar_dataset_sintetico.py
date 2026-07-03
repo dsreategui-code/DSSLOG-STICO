@@ -32,12 +32,12 @@ ALMACEN = {
 
 # Centroides aproximados y radio de dispersion (en grados) por zona
 ZONAS = {
-    "Callao / Oeste":   {"centro": (-12.058, -77.115), "radio": 0.035},
+    "Callao / Oeste":   {"centro": (-12.055, -77.108), "radio": 0.024},
     "Lima Centro":      {"centro": (-12.060, -77.040), "radio": 0.030},
     "Lima Norte":       {"centro": (-11.985, -77.060), "radio": 0.045},
-    "Lima Sur":         {"centro": (-12.180, -76.990), "radio": 0.050},
-    "Lima Este":        {"centro": (-12.050, -76.940), "radio": 0.050},
-    "Lima Moderna":     {"centro": (-12.105, -77.015), "radio": 0.030},
+    "Lima Sur":         {"centro": (-12.175, -76.985), "radio": 0.042},
+    "Lima Este":        {"centro": (-12.050, -76.945), "radio": 0.045},
+    "Lima Moderna":     {"centro": (-12.105, -77.010), "radio": 0.024},
 }
 
 DISTRITOS_POR_ZONA = {
@@ -128,6 +128,31 @@ def _haversine_aprox_km(lat1, lon1, lat2, lon2):
 # ---------------------------------------------------------------------------
 # Generadores
 # ---------------------------------------------------------------------------
+def _snap_a_calle(df: pd.DataFrame) -> pd.DataFrame:
+    """Si OSRM local esta disponible, pega cada pedido a la calle transitable mas cercana.
+    Evita puntos en el mar / cerros inaccesibles y los deja sobre vias reales. Si no hay OSRM,
+    devuelve el df sin cambios (los radios reducidos por zona ya limitan el desborde al mar)."""
+    try:
+        from geo.osrm_client import OSRMClient
+        cli = OSRMClient()
+        if not cli.disponible():
+            print("  (OSRM no disponible: se omite el snap a calle)")
+            return df
+    except Exception:  # noqa: BLE001
+        return df
+    lats, lons, movidos = [], [], 0
+    for _, row in df.iterrows():
+        (la, lo), dist = cli.snap((float(row["latitud"]), float(row["longitud"])))
+        if dist > 60:
+            movidos += 1
+        lats.append(round(la, 6))
+        lons.append(round(lo, 6))
+    df = df.copy()
+    df["latitud"], df["longitud"] = lats, lons
+    print(f"  snap OSRM a calle: {movidos}/{len(df)} pedidos reubicados sobre via real")
+    return df
+
+
 def gen_pedidos() -> pd.DataFrame:
     pedidos = []
     zonas_lista = list(ZONAS.keys())
@@ -165,7 +190,7 @@ def gen_pedidos() -> pd.DataFrame:
             "telefono": f"9{random.randint(10000000, 99999999)}",
             "direccion": f"Av. {random.choice(APELLIDOS)} {random.randint(100, 2400)}",
         })
-    return pd.DataFrame(pedidos)
+    return _snap_a_calle(pd.DataFrame(pedidos))
 
 
 def gen_vehiculos() -> pd.DataFrame:

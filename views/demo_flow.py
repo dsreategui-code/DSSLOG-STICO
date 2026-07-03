@@ -157,6 +157,43 @@ def _paso_params():
 
 
 # ------------------------------------------------------------------ Paso 3: Motor
+def _osrm():
+    """Cliente OSRM cacheado en sesion (None si no esta disponible)."""
+    if "df_osrm_ok" not in st.session_state:
+        try:
+            from geo.osrm_client import OSRMClient
+            cli = OSRMClient()
+            st.session_state.df_osrm = cli
+            st.session_state.df_osrm_ok = cli.disponible()
+        except Exception:  # noqa: BLE001
+            st.session_state.df_osrm = None
+            st.session_state.df_osrm_ok = False
+    return st.session_state.df_osrm if st.session_state.df_osrm_ok else None
+
+
+def _enriquecer_geometrias(esc):
+    """Reemplaza las geometrias de linea recta por la geometria REAL de calle (OSRM Route).
+    Idempotente (marca esc['osrm_geom']). Si OSRM no esta, deja las lineas rectas."""
+    if esc.get("osrm_geom"):
+        return esc
+    osrm = _osrm()
+    if osrm is None:
+        return esc
+    hub = esc["hub"]
+    for veh, paradas in esc["rutas"].items():
+        coords = ([(hub["lat"], hub["lon"])]
+                  + [(p["coord"][0], p["coord"][1]) for p in paradas]
+                  + [(hub["lat"], hub["lon"])])
+        try:
+            g = osrm.geometria_ruta(coords)
+            if g["geojson"]["coordinates"]:
+                esc["geometrias"][veh] = g["geojson"]["coordinates"]
+        except Exception:  # noqa: BLE001
+            pass
+    esc["osrm_geom"] = True
+    return esc
+
+
 def _colores_por_veh(esc):
     vehs = list(esc["rutas"].keys())
     return {v: VEHCOL[i % len(VEHCOL)] for i, v in enumerate(vehs)}
@@ -304,11 +341,13 @@ def _paso_motor():
         st.markdown("**Ruta de la candidata seleccionada**")
         esc = res["escenarios"].get(sel)
         if esc:
+            _enriquecer_geometrias(esc)
             vehs = list(esc["rutas"].keys())
             filtro = st.multiselect("Filtrar camiones en el mapa", vehs, default=vehs,
                                     key="df_mapveh",
                                     help="Selecciona uno o mas vehiculos para aislar su ruta.")
             _mapa_coloreado(esc, vehiculos=filtro or vehs)
+            st.caption(f"Trazado de rutas: **{'OSRM (calles reales)' if esc.get('osrm_geom') and _osrm() else 'linea recta (sin OSRM)'}**.")
     with mc2:
         if es_robusto(res) and ev is not None:
             st.plotly_chart(fig_robustez_por_escenario(ev), use_container_width=True, config=PLOT_CFG)
@@ -398,6 +437,8 @@ def _resultados(esc_ini, esc_inc, esc_fin, incidencias, tasa, mult):
         sel = st.selectbox("Ver en el mapa", opciones, key="df_cmpveh")
         vehs = cambiados if sel == "Solo camiones cambiados" else [sel]
         if vehs:
+            _enriquecer_geometrias(esc_inc)
+            _enriquecer_geometrias(esc_fin)
             _mapa_ini_fin(esc_inc, esc_fin, vehs)
 
         vista = cmp[cmp["vehiculo_id"].isin(vehs)] if sel != "Solo camiones cambiados" or cambiados else cmp

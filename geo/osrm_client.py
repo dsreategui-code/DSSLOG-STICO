@@ -68,6 +68,30 @@ class OSRMClient:
         except Exception:  # noqa: BLE001
             return False
 
+    def snap(self, coord: Coord) -> Tuple[Coord, float]:
+        """Pega una coordenada (lat, lon) al camino transitable mas cercano (servicio nearest).
+
+        Devuelve ((lat, lon) pegada, distancia_m al camino). Si OSRM no responde, devuelve la
+        coordenada original y distancia -1. Un `distancia` grande (p. ej. >300 m) indica que el
+        punto estaba lejos de toda via (tipicamente en el mar o zona no accesible).
+        """
+        lat, lon = float(coord[0]), float(coord[1])
+        try:
+            url = f"{self.base_url}/nearest/v1/{self.profile}/{lon},{lat}?number=1"
+            r = requests.get(url, timeout=min(self.timeout, 5))
+            d = r.json()
+            if d.get("code") == "Ok" and d.get("waypoints"):
+                wp = d["waypoints"][0]
+                lo, la = wp["location"]                  # OSRM devuelve [lon, lat]
+                return (round(float(la), 6), round(float(lo), 6)), float(wp.get("distance", 0.0))
+        except Exception:  # noqa: BLE001
+            pass
+        return (lat, lon), -1.0
+
+    def snap_coords(self, coords: Sequence[Coord]) -> List[Tuple[Coord, float]]:
+        """Pega una lista de coordenadas (lat, lon) al camino mas cercano."""
+        return [self.snap(c) for c in coords]
+
     # ----------------------------------------------------------------- #
     # Table Service -> matriz de tiempos y distancias
     # ----------------------------------------------------------------- #
