@@ -474,6 +474,7 @@ def _paso_gemelo():
                f"(retraso x{mult:g})  ·  viaje con factor de circuito (aprox. calle sin OSRM)  "
                f"·  gemelo simulado, no tiempo real.")
 
+    _enriquecer_geometrias(esc_ini)              # rutas por calle (OSRM) para el gemelo
     esc_inc, incidencias = simular_incidencias(
         esc_ini, tasa=tasa, seed=int(st.session_state.df_seed), mult_retraso=mult)
     esc_fin, _ = mitigar_con_reruteo(esc_inc)

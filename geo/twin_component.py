@@ -40,6 +40,40 @@ VEHCOL = [[21, 112, 239], [127, 86, 217], [14, 150, 204], [181, 71, 8],
           [3, 152, 158], [122, 39, 113], [217, 45, 32], [2, 122, 72]]
 
 
+def _cumdist(geom):
+    """Distancia acumulada (km aprox, planar) a lo largo de una polilinea [[lon,lat],...]."""
+    cum = [0.0]
+    for i in range(1, len(geom)):
+        (x0, y0), (x1, y1) = geom[i - 1], geom[i]
+        mlat = math.radians((y0 + y1) / 2.0)
+        dx = (x1 - x0) * 111.0 * math.cos(mlat)
+        dy = (y1 - y0) * 111.0
+        cum.append(round(cum[-1] + (dx * dx + dy * dy) ** 0.5, 4))
+    return cum
+
+
+def _closest_cum(geom, cum, lon, lat):
+    """Distancia acumulada del vertice de la polilinea mas cercano a (lon,lat)."""
+    best, bd = 0, 1e18
+    for i, (x, y) in enumerate(geom):
+        d = (x - lon) ** 2 + (y - lat) ** 2
+        if d < bd:
+            bd, best = d, i
+    return cum[best]
+
+
+def _downsample(geom, objetivo=220):
+    """Reduce la densidad de la polilinea OSRM manteniendo su forma (cada k-esimo + extremos)."""
+    n = len(geom)
+    if n <= objetivo:
+        return [[round(x, 5), round(y, 5)] for x, y in geom]
+    step = max(1, n // objetivo)
+    ds = [geom[i] for i in range(0, n, step)]
+    if ds[-1] != geom[-1]:
+        ds.append(geom[-1])
+    return [[round(x, 5), round(y, 5)] for x, y in ds]
+
+
 def _datos_gemelo(escenario: dict) -> dict:
     hub = {"lon": escenario["hub"]["lon"], "lat": escenario["hub"]["lat"],
            "nombre": escenario["hub"].get("nombre", "HUB")}
@@ -81,8 +115,16 @@ def _datos_gemelo(escenario: dict) -> dict:
         # incidencias no paralizan pero SI aparecen en el feed de alertas (con su causa).
         alta = bool(inc_info and inc_info.get("sev") == "alta")
         alerta = bool(inc_idx >= 0 and (card is not None or alta))
+        # Geometria de calle (OSRM) para que el camion siga las vias en vez de linea recta.
+        geomv = escenario.get("geometrias", {}).get(veh)
+        geom = cum = dstop = None
+        if geomv and len(geomv) > len(stops) + 2:      # enriquecida (no linea recta hub->paradas)
+            geom = _downsample(geomv)
+            cum = _cumdist(geom)
+            dstop = [round(_closest_cum(geom, cum, s["lon"], s["lat"]), 4) for s in stops]
         vehiculos.append({"veh": veh, "stops": stops, "incIdx": inc_idx, "alerta": bool(alerta),
-                          "ordenProp": orden_prop, "card": card, "inc": inc_info})
+                          "ordenProp": orden_prop, "card": card, "inc": inc_info,
+                          "geom": geom, "cum": cum, "dstop": dstop})
     return {"hub": hub, "t0": t0, "speed": float(VELOCIDAD_KMH),
             "circuito": float(FACTOR_CIRCUITO), "vehiculos": vehiculos,
             "colores": VEHCOL, "view": _fit_view(lons, lats)}
@@ -139,6 +181,7 @@ _PLANTILLA = r"""
     function nuevoEstado(){
       return DATA.vehiculos.map(function(v){
         return {veh:v.veh,stops:v.stops,incIdx:v.incIdx,ordenProp:v.ordenProp,card:v.card,
+                alerta:v.alerta,inc:v.inc,geom:v.geom,cum:v.cum,dstop:v.dstop,geomTimes:null,
                 order:v.stops.map(function(_,i){return i;}),
                 decided:(v.alerta?false:true),applied:false,pause:0,tInc:null,
                 arr:[],dep:[],arrOf:{},total:0};
@@ -153,13 +196,36 @@ _PLANTILLA = r"""
       t+=hav(prev,DATA.hub)*DATA.circuito/DATA.speed*60;
       v.arr=arr;v.dep=dep;v.arrOf=arrOf;v.total=t;
       if(v.tInc===null&&v.incIdx>=0){var pos=v.order.indexOf(v.incIdx);v.tInc=(pos>=0?arr[pos]:-1);}
+      // Mapeo de la geometria de calle (OSRM): distancia acumulada por parada + tiempo por vertice.
+      if(v.geom&&v.dstop&&!v.applied){
+        var dseg=[0];for(var k=0;k<v.order.length;k++){dseg.push(v.dstop[v.order[k]]);}
+        v.dseg=dseg;
+        var gt=new Array(v.geom.length);
+        for(var j=0;j<v.geom.length;j++){var d=v.cum[j];var kk=0;while(kk<v.order.length&&d>dseg[kk+1])kk++;
+          if(kk>=v.order.length){gt[j]=v.total;continue;}
+          var tStart=(kk===0?DATA.t0:dep[kk-1]);var d0=dseg[kk],d1=dseg[kk+1];
+          var f=(d1>d0)?(d-d0)/(d1-d0):1;f=Math.max(0,Math.min(1,f));gt[j]=tStart+f*(arr[kk]-tStart);}
+        v.geomTimes=gt;
+      } else { v.geomTimes=null; }
+    }
+    function posAtDist(geom,cum,d){
+      if(d<=0)return geom[0];var n=cum.length;if(d>=cum[n-1])return geom[n-1];
+      for(var j=0;j<n-1;j++){if(d>=cum[j]&&d<=cum[j+1]){var f=(cum[j+1]>cum[j])?(d-cum[j])/(cum[j+1]-cum[j]):0;return [geom[j][0]+f*(geom[j+1][0]-geom[j][0]),geom[j][1]+f*(geom[j+1][1]-geom[j][1])];}}
+      return geom[n-1];
     }
     V.forEach(recalc);
     function localT(v){return simT-v.pause;}
     function awaiting(v){return v.alerta&&!v.decided&&v.tInc>=0&&localT(v)>=v.tInc;}
     function posAt(v,lt){
       if(lt>=v.total)return [DATA.hub.lon,DATA.hub.lat];
-      var prev=DATA.hub;
+      if(v.geom&&v.geomTimes&&v.dseg&&!v.applied){          // seguir la calle real (OSRM)
+        for(var k=0;k<v.order.length;k++){var s=v.stops[v.order[k]];
+          var travStart=(k===0?DATA.t0:v.dep[k-1]);
+          if(lt<v.arr[k]){var f=(v.arr[k]>travStart)?(lt-travStart)/(v.arr[k]-travStart):1;f=Math.max(0,Math.min(1,f));var d=v.dseg[k]+f*(v.dseg[k+1]-v.dseg[k]);return posAtDist(v.geom,v.cum,d);}
+          if(lt<v.dep[k])return [s.lon,s.lat];}
+        return [DATA.hub.lon,DATA.hub.lat];
+      }
+      var prev=DATA.hub;                                    // respaldo: linea recta entre paradas
       for(var k=0;k<v.order.length;k++){var s=v.stops[v.order[k]];
         var travStart=(k===0?DATA.t0:v.dep[k-1]);
         if(lt<v.arr[k]){var f=(v.arr[k]>travStart)?(lt-travStart)/(v.arr[k]-travStart):1;f=Math.max(0,Math.min(1,f));return [prev.lon+f*(s.lon-prev.lon),prev.lat+f*(s.lat-prev.lat)];}
@@ -239,9 +305,10 @@ _PLANTILLA = r"""
     function render(){
       var layers=[];var pd=[];var done_n=0,aTiempo=0,tard=0,total=0,nAlert=0,incVistas=0;
       for(var i=0;i<V.length;i++){var v=V[i];var lt=localT(v);var col=vcol(i);
-        var path=[[DATA.hub.lon,DATA.hub.lat]];var ts=[DATA.t0];
-        for(var k=0;k<v.order.length;k++){var s=v.stops[v.order[k]];path.push([s.lon,s.lat]);ts.push(v.arr[k]);}
-        layers.push(new deck.TripsLayer({id:'tr'+i,data:[{path:path,ts:ts}],getPath:function(d){return d.path;},getTimestamps:function(d){return d.ts;},getColor:col,opacity:0.6,widthMinPixels:3,trailLength:60,currentTime:lt}));
+        var path,ts;
+        if(v.geom&&v.geomTimes&&!v.applied){path=v.geom;ts=v.geomTimes;}
+        else{path=[[DATA.hub.lon,DATA.hub.lat]];ts=[DATA.t0];for(var kp=0;kp<v.order.length;kp++){var sp=v.stops[v.order[kp]];path.push([sp.lon,sp.lat]);ts.push(v.arr[kp]);}}
+        layers.push(new deck.TripsLayer({id:'tr'+i,data:[{path:path,ts:ts}],getPath:function(d){return d.path;},getTimestamps:function(d){return d.ts;},getColor:col,opacity:0.6,widthMinPixels:3,trailLength:80,currentTime:lt}));
         layers.push(new deck.ScatterplotLayer({id:'vh'+i,data:[v],getPosition:function(d){return posAt(d,localT(d));},getFillColor:col,getRadius:150,radiusMinPixels:6,radiusMaxPixels:13,stroked:true,getLineColor:[255,255,255],lineWidthMinPixels:2,updateTriggers:{getPosition:lt}}));
         if(incActivo(v,lt)){var ip=v.stops[v.incIdx];layers.push(new deck.ScatterplotLayer({id:'rg'+i,data:[ip],getPosition:function(d){return [d.lon,d.lat];},filled:false,stroked:true,getLineColor:[217,45,32],lineWidthMinPixels:2,getRadius:400+260*Math.abs(Math.sin(simT/2.2)),radiusMinPixels:12,radiusMaxPixels:46,updateTriggers:{getRadius:simT}}));nAlert++;}
         for(var k2=0;k2<v.stops.length;k2++){var st=estadoStop(v,k2,lt);var s2=v.stops[k2];var a2=v.arrOf[k2];
