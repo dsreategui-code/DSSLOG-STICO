@@ -38,10 +38,14 @@ def test_reruteo_nunca_empeora_y_puede_recuperar():
     esc_con, acc = mitigar_con_reruteo(esc_sin)
     r_sin = resumen_operacion(esc_sin, inc)
     r_con = resumen_operacion(esc_con, inc)
-    assert r_con["otd"] >= r_sin["otd"] - 1e-9         # accept-if-better: nunca empeora
-    for a in acc:                                       # cada accion mejora (o iguala)
-        assert a["tard_despues_min"] <= a["tard_antes_min"]
+    assert r_con["otd"] >= r_sin["otd"] - 1e-9         # accept-if-better: nunca empeora el OTD
+    for a in acc:
         assert a["recuperadas"] >= 0
+        # Objetivo lexicografico (nº de tardias, tardanza): si recupera entregas (menos
+        # tardias) la tardanza total PUEDE subir (Moore difiere la mas costosa); si no
+        # recupera ninguna, entonces debe bajar la tardanza.
+        if a["recuperadas"] == 0:
+            assert a["tard_despues_min"] <= a["tard_antes_min"]
 
 
 def test_proponer_no_muta_y_aplicar_solo_lo_aprobado():

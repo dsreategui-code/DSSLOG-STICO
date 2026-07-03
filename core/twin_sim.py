@@ -24,6 +24,7 @@ import pandas as pd
 from core.risk_engine import UMBRAL_RIESGO, clasificar_iri
 
 MARGEN_ALERTA_MIN = 20.0   # antelacion con que salta una alerta sin incidencia previa
+MARGEN_RIESGO_MIN = 25.0   # una parada a <25 min de su ventana ya se considera EN RIESGO
 
 # Catalogo de tipos de incidencia (categorias reales del dominio de ultima milla en Lima).
 # 'afecta_otif': la entrega falla en primer intento (ausencia) -> cuenta contra OTIF, no OTD.
@@ -115,11 +116,16 @@ def proponer_reruteo(escenario: dict) -> List[dict]:
         _recomputar(base, t0, pos0)
         k_base = (_n_tarde(base), _tardanza_total(base))
 
-        cand = sorted(copy.deepcopy(pend), key=lambda x: float(x["ventana_fin_min"]))
-        _recomputar(cand, t0, pos0)
-        k_cand = (_n_tarde(cand), _tardanza_total(cand))
+        # Dos candidatos: EDD (ventana mas proxima) y Moore-Hodgson (minimiza nº de tardias
+        # difiriendo la parada mas costosa). Se elige el mejor y se propone solo si mejora.
+        opciones = []
+        for orden in (sorted(copy.deepcopy(pend), key=lambda x: float(x["ventana_fin_min"])),
+                      _moore_orden(copy.deepcopy(pend), t0, pos0)):
+            _recomputar(orden, t0, pos0)
+            opciones.append(((_n_tarde(orden), _tardanza_total(orden)), orden))
+        k_cand, cand = min(opciones, key=lambda o: o[0])
 
-        if k_cand >= k_base:          # solo se propone si mejora
+        if k_cand >= k_base:          # solo se propone si reduce nº de tardias / tardanza
             continue
         inc = paradas[idx]
         propuestas.append({
@@ -402,6 +408,36 @@ def _reproyectar_geometrias(escenario: dict) -> None:
 
 def _n_tarde(paradas: list) -> int:
     return sum(1 for p in paradas if float(p.get("tardanza_min", 0.0)) > 0.0)
+
+
+def _en_riesgo_ct(paradas: list) -> int:
+    """Nº de paradas a <MARGEN_RIESGO_MIN de su ventana (o ya vencidas)."""
+    return sum(1 for p in paradas
+               if float(p["eta_min"]) > float(p.get("ventana_fin_min", 1e9)) - MARGEN_RIESGO_MIN)
+
+
+def _moore_orden(pend: list, t0: float, pos0) -> list:
+    """Moore-Hodgson (aproximado): minimiza el Nº de entregas tardias difiriendo al final la
+    parada mas costosa cuando una llegaria tarde. Tiempos de proceso = viaje (en orden EDD) +
+    servicio + incidencia. El orden resultante se recalcula luego con el viaje real."""
+    from core.demo_scenario import VELOCIDAD_KMH, _haversine_km
+    edd = sorted(pend, key=lambda x: float(x["ventana_fin_min"]))
+    proc, prev = {}, pos0
+    for p in edd:
+        proc[id(p)] = (_haversine_km(prev, p["coord"]) / VELOCIDAD_KMH * 60.0
+                       + float(p.get("servicio_min", 8.0)) + float(p.get("incidencia_min", 0.0)))
+        prev = p["coord"]
+    sched, deferred, t = [], [], float(t0)
+    for p in edd:
+        sched.append(p)
+        t += proc[id(p)]
+        arr = t - float(p.get("servicio_min", 8.0)) - float(p.get("incidencia_min", 0.0))
+        if arr > float(p["ventana_fin_min"]):        # llegaria tarde -> difiere la mas costosa
+            worst = max(sched, key=lambda q: proc[id(q)])
+            sched.remove(worst)
+            deferred.append(worst)
+            t -= proc[id(worst)]
+    return sched + deferred
 
 
 def _tardanza_total(paradas: list) -> float:

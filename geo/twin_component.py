@@ -13,7 +13,7 @@ import json
 import math
 
 from core.demo_scenario import VELOCIDAD_KMH
-from core.twin_sim import _franja, _hhmm, proponer_reruteo
+from core.twin_sim import MARGEN_RIESGO_MIN, _franja, _hhmm, proponer_reruteo
 
 
 def _fit_view(lons, lats, w: int = 720, h: int = 460) -> dict:
@@ -75,7 +75,12 @@ def _datos_gemelo(escenario: dict) -> dict:
                     "tardeAct": prop["tarde_actual"], "tardAct": prop["tard_actual_min"],
                     "tardeProp": prop["tarde_propuesto"], "tardProp": prop["tard_propuesto_min"],
                     "recuperadas": prop["recuperadas"], "reduccion": prop["reduccion_min"]}
-        vehiculos.append({"veh": veh, "stops": stops, "incIdx": inc_idx,
+        # 'alerta' = el vehiculo se PARALIZA para decidir. Se dispara cuando hay una decision
+        # real: existe un re-ruteo propuesto, o la incidencia es de ALTA severidad. El resto de
+        # incidencias no paralizan pero SI aparecen en el feed de alertas (con su causa).
+        alta = bool(inc_info and inc_info.get("sev") == "alta")
+        alerta = bool(inc_idx >= 0 and (card is not None or alta))
+        vehiculos.append({"veh": veh, "stops": stops, "incIdx": inc_idx, "alerta": bool(alerta),
                           "ordenProp": orden_prop, "card": card, "inc": inc_info})
     return {"hub": hub, "t0": t0, "speed": float(VELOCIDAD_KMH), "vehiculos": vehiculos,
             "colores": VEHCOL, "view": _fit_view(lons, lats)}
@@ -107,7 +112,8 @@ _PLANTILLA = r"""
   </div>
   <div id="map" style="position:relative;width:100%;height:__ALTURA__px;border-radius:12px;overflow:hidden;background:#EAECF0;"></div>
   <div id="live" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px;"></div>
-  <div id="alerts" style="display:flex;flex-direction:column;gap:8px;margin-top:10px;"></div>
+  <div style="font-size:12.5px;font-weight:600;color:#344054;margin:12px 0 6px;">Centro de alertas</div>
+  <div id="alerts" style="display:flex;flex-direction:column;gap:8px;max-height:360px;overflow:auto;"></div>
   <div id="err" style="color:#B42318;font-size:12px;margin-top:6px;"></div>
 </div>
 <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
@@ -132,7 +138,7 @@ _PLANTILLA = r"""
       return DATA.vehiculos.map(function(v){
         return {veh:v.veh,stops:v.stops,incIdx:v.incIdx,ordenProp:v.ordenProp,card:v.card,
                 order:v.stops.map(function(_,i){return i;}),
-                decided:(v.card?false:true),applied:false,pause:0,tInc:null,
+                decided:(v.alerta?false:true),applied:false,pause:0,tInc:null,
                 arr:[],dep:[],arrOf:{},total:0};
       });
     }
@@ -148,7 +154,7 @@ _PLANTILLA = r"""
     }
     V.forEach(recalc);
     function localT(v){return simT-v.pause;}
-    function awaiting(v){return v.card&&!v.decided&&v.tInc>=0&&localT(v)>=v.tInc;}
+    function awaiting(v){return v.alerta&&!v.decided&&v.tInc>=0&&localT(v)>=v.tInc;}
     function posAt(v,lt){
       if(lt>=v.total)return [DATA.hub.lon,DATA.hub.lat];
       var prev=DATA.hub;
@@ -183,7 +189,7 @@ _PLANTILLA = r"""
       pend.forEach(function(si){if(byPid[v.stops[si].pid]!==undefined)no.push(si);});
       v.order=head.concat(no);
     }
-    function decide(i,act){var v=V[i];if(v.decided)return;if(act==='ap'){aplicarPropuesta(v);v.applied=true;}v.pause=simT-v.tInc;v.decided=true;recalc(v);sigAlert='';}
+    function decide(i,act){var v=V[i];if(v.decided)return;if(act==='ap'&&v.ordenProp){aplicarPropuesta(v);v.applied=true;}v.pause=simT-v.tInc;v.decided=true;recalc(v);sigAlert='';}
 
     var deckgl=new deck.DeckGL({container:'map',map:maplibregl,
       mapStyle:'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
@@ -206,16 +212,20 @@ _PLANTILLA = r"""
 
     function buildAlerts(){
       var box=document.getElementById('alerts');var html='';var sevcol={alta:'#B42318',media:'#B54708',baja:'#475467'};
-      for(var i=0;i<V.length;i++){var v=V[i];if(!incActivo(v,localT(v)))continue;var c=v.inc;var sc=sevcol[c.sev]||'#B54708';
+      for(var i=0;i<V.length;i++){var v=V[i];var lt=localT(v);if(!v.inc||lt<v.tInc)continue;var c=v.inc;var sc=sevcol[c.sev]||'#B54708';
         var head='<div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:'+sc+';display:inline-block;"></span><b>'+v.veh+' &middot; '+c.desc+'</b><span style="margin-left:auto;font-size:11px;color:#fff;background:'+sc+';border-radius:20px;padding:2px 8px;">severidad '+c.sev+'</span></div>'
           +'<div style="color:#475467;margin:4px 0 8px;">'+c.distrito+' &middot; franja '+c.franja+' &middot; '+c.hora+' &middot; +'+Math.round(c.min)+' min &middot; pedido '+c.pid+'</div>';
-        if(v.card&&!v.decided){var p=v.card;
-          html+='<div style="background:#fff;border:1px solid #EAECF0;border-left:4px solid '+sc+';border-radius:10px;padding:12px 14px;box-shadow:0 1px 3px rgba(16,24,40,.06);font-size:13px;">'+head
-            +'<div style="color:#344054;margin-bottom:8px;"><b>Impacto:</b> '+p.nPend+' paradas pendientes, '+p.tardeAct+' quedarian fuera de ventana. <b>Propuesta del motor:</b> re-secuenciar &rarr; '+(p.recuperadas>0?('recupera '+p.recuperadas+' entrega(s), '):'')+'-'+Math.round(p.reduccion)+' min.</div>'
+        if(awaiting(v)&&v.card){var p=v.card;
+          html+='<div style="background:#fff;border:1px solid #FDA29B;border-left:4px solid '+sc+';border-radius:10px;padding:12px 14px;box-shadow:0 2px 8px rgba(16,24,40,.10);font-size:13px;">'+head
+            +'<div style="color:#344054;margin-bottom:8px;">&#128681; <b>'+v.veh+' PARALIZADO.</b> Impacto: '+p.nPend+' paradas pendientes, '+p.tardeAct+' en riesgo de incumplir. <b>Propuesta del motor:</b> re-secuenciar &rarr; '+(p.recuperadas>0?('recupera '+p.recuperadas+' entrega(s), '):'')+'-'+Math.round(p.reduccion)+' min.</div>'
             +'<div style="display:flex;gap:8px;"><button data-i="'+i+'" data-a="ap" style="flex:1;padding:7px;border:0;border-radius:8px;background:#027A48;color:#fff;cursor:pointer;font-size:12.5px;font-weight:600;">Aprobar re-ruteo</button><button data-i="'+i+'" data-a="de" style="flex:1;padding:7px;border:1px solid #D0D5DD;border-radius:8px;background:#fff;cursor:pointer;font-size:12.5px;">Mantener ruta</button></div></div>';
+        }else if(awaiting(v)){
+          html+='<div style="background:#fff;border:1px solid #FDA29B;border-left:4px solid '+sc+';border-radius:10px;padding:12px 14px;box-shadow:0 2px 8px rgba(16,24,40,.10);font-size:13px;">'+head
+            +'<div style="color:#344054;margin-bottom:8px;">&#128681; <b>'+v.veh+' PARALIZADO.</b> Incidencia de alta severidad. El re-ruteo no recupera entregas (el plan absorbe la demora); confirma para continuar.</div>'
+            +'<div style="display:flex;gap:8px;"><button data-i="'+i+'" data-a="de" style="flex:1;padding:7px;border:0;border-radius:8px;background:#1570EF;color:#fff;cursor:pointer;font-size:12.5px;font-weight:600;">Continuar (mantener ruta)</button></div></div>';
         }else{
-          var nota=v.applied?'Re-ruteo aprobado y aplicado.':(v.decided?'Ruta original mantenida.':'Sin re-secuenciacion que mejore: la demora se absorbe en la ruta.');
-          html+='<div style="background:#fff;border:1px solid #EAECF0;border-left:4px solid '+sc+';border-radius:10px;padding:12px 14px;font-size:13px;">'+head+'<div style="color:#475467;">'+nota+'</div></div>';
+          var estado=v.applied?'Re-ruteo aplicado':(v.decided?'Atendida':(incActivo(v,lt)?'En curso':'Demora absorbida por el plan'));
+          html+='<div style="background:#F9FAFB;border:1px solid #EAECF0;border-left:4px solid '+sc+';border-radius:10px;padding:10px 12px;font-size:12.5px;">'+head+'<div style="color:#475467;">Estado: '+estado+'.</div></div>';
         }
       }
       if(!html){html='<div style="color:#667085;font-size:12.5px;padding:4px 2px;">'+(started?'Sin incidencias activas en este momento.':'Pulsa Iniciar para arrancar la jornada. Las alertas apareceran aqui.')+'</div>';}
@@ -248,13 +258,13 @@ _PLANTILLA = r"""
         +tile('OTD acumulado',otd+'%',otd>=90?'#027A48':(otd>=75?'#B54708':'#B42318'))
         +tile('Incidencias',incVistas,incVistas>0?'#B54708':'#0C111D')
         +tile('Alertas activas',nAlert,nAlert>0?'#B42318':'#0C111D');
-      var sig='';for(var i2=0;i2<V.length;i2++){var vv=V[i2];sig+=(incActivo(vv,localT(vv))?((awaiting(vv)?'A':'I')+(vv.applied?'1':'0')):'0');}
+      var sig='';for(var i2=0;i2<V.length;i2++){var vv=V[i2];var lt2=localT(vv);var occ=(vv.inc&&lt2>=vv.tInc);sig+=(occ?((awaiting(vv)?'A':(vv.decided?'D':(incActivo(vv,lt2)?'C':'O')))+(vv.applied?'1':'0')):'0');}
       if(sig!==sigAlert){sigAlert=sig;buildAlerts();}
       document.getElementById('clk').textContent=done?'Jornada completada':hhmm(simT);
     }
     function finished(){for(var i=0;i<V.length;i++){if(!V[i].decided)return false;if(localT(V[i])<V[i].total)return false;}return true;}
     function loop(now){var dt=Math.min(0.05,(now-last)/1000);last=now;simT+=dt*mult;
-      for(var i=0;i<V.length;i++){var v=V[i];if(v.card&&!v.decided&&v.tInc>=0&&(simT-v.pause)>=v.tInc){v.pause=simT-v.tInc;}}
+      for(var i=0;i<V.length;i++){var v=V[i];if(v.alerta&&!v.decided&&v.tInc>=0&&(simT-v.pause)>=v.tInc){v.pause=simT-v.tInc;}}
       if(finished()){done=true;playing=false;pp.innerHTML='&#8635; Reiniciar';}
       render();if(playing&&!done)requestAnimationFrame(loop);}
     render();buildAlerts();

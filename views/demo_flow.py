@@ -6,6 +6,8 @@ El Motor de Decision es transversal: en el paso 3 genera candidatas por criterio
 (DRO) y recomienda; el usuario elige una y el paso 4 la anima en el gemelo. Los resultados
 (generales / por camion / incidencias / comparacion) viven en la pestaña Resultados del gemelo.
 """
+import pandas as pd
+import pydeck as pdk
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -13,7 +15,6 @@ from components.cards import kpi_row
 from components.layout import render_divider, render_footer, render_view_title
 from core.metrics import tabla_candidatas, tabla_iri
 from core.planner import planificar
-from core.telemetry import estado_pedidos_en_tick
 from core.twin_sim import (agregados_incidencias, comparar_rutas, mitigar_con_reruteo,
                            resumen_operacion, simular_incidencias, tabla_incidencias,
                            tabla_operacion, tabla_por_camion, variabilidad_operacion)
@@ -23,8 +24,8 @@ from dashboards.twin_dashboard import (fig_entregas_por_hora, fig_estado_final,
                                        fig_incidencias_por_franja, fig_incidencias_por_tipo,
                                        fig_otd_otif_camion, fig_tardanza_por_vehiculo,
                                        fig_variabilidad)
-from geo.pydeck_layers import capa_hub, capa_pedidos, capa_rutas, construir_deck
-from geo.twin_component import html_gemelo
+from geo.pydeck_layers import construir_deck
+from geo.twin_component import VEHCOL, html_gemelo
 from services.cortex_loader import cargar_contexto
 from services.data_loader import dataset_exists, generar_dataset_demo
 from utils.constants import VISTA_HOME
@@ -147,17 +148,88 @@ def _paso_params():
 
 
 # ------------------------------------------------------------------ Paso 3: Motor
-def _mapa_escenario(esc, vehiculos=None):
-    """Dibuja rutas + pedidos + hub; si se pasa ``vehiculos``, filtra a ese subconjunto."""
-    if vehiculos is not None:
-        sel = set(vehiculos)
-        esc = {**esc,
-               "rutas": {v: r for v, r in esc["rutas"].items() if v in sel},
-               "geometrias": {v: g for v, g in esc["geometrias"].items() if v in sel},
-               "vehiculos": [v for v in esc["vehiculos"] if v in sel]}
-    df_ped = estado_pedidos_en_tick(esc, float(esc["jornada_fin_min"]))
-    layers = [capa_rutas(esc), capa_pedidos(df_ped), capa_hub(esc["hub"])]
-    st.pydeck_chart(construir_deck(layers, esc["hub"]), use_container_width=True)
+def _colores_por_veh(esc):
+    vehs = list(esc["rutas"].keys())
+    return {v: VEHCOL[i % len(VEHCOL)] for i, v in enumerate(vehs)}
+
+
+def _leyenda(color_de, vehs):
+    chips = "".join(
+        f'<span style="display:inline-flex;align-items:center;gap:5px;margin:0 12px 4px 0;">'
+        f'<span style="width:12px;height:12px;border-radius:3px;background:rgb({c[0]},{c[1]},'
+        f'{c[2]});display:inline-block;"></span>{v}</span>'
+        for v, c in color_de.items() if v in vehs)
+    st.markdown(f'<div style="font-size:12px;color:#475467;">{chips}</div>',
+                unsafe_allow_html=True)
+
+
+def _capas_rutas(esc, vehs, color_de):
+    hub = esc["hub"]
+    rutas, stops = [], []
+    for v in vehs:
+        c = color_de[v]
+        geom = esc["geometrias"].get(v) or ([[hub["lon"], hub["lat"]]]
+               + [[p["coord"][1], p["coord"][0]] for p in esc["rutas"][v]])
+        rutas.append({"vehiculo_id": v, "path": geom, "color": c})
+        for p in esc["rutas"][v]:
+            stops.append({"lon": p["coord"][1], "lat": p["coord"][0], "color": c,
+                          "pedido_id": p["pedido_id"], "vehiculo_id": v})
+    pl_ruta = pdk.Layer("PathLayer", pd.DataFrame(rutas), get_path="path", get_color="color",
+                        width_min_pixels=3, get_width=4, pickable=True)
+    pl_stop = pdk.Layer("ScatterplotLayer", pd.DataFrame(stops), get_position=["lon", "lat"],
+                        get_fill_color="color", get_radius=95, radius_min_pixels=4,
+                        radius_max_pixels=9, stroked=True, get_line_color=[255, 255, 255],
+                        line_width_min_pixels=1, pickable=True)
+    pl_hub = pdk.Layer("ScatterplotLayer",
+                       pd.DataFrame([{"lon": hub["lon"], "lat": hub["lat"]}]),
+                       get_position=["lon", "lat"], get_fill_color=[12, 17, 29],
+                       get_radius=180, radius_min_pixels=7)
+    return [pl_ruta, pl_stop, pl_hub]
+
+
+def _mapa_coloreado(esc, vehiculos=None):
+    """Mapa con cada camion de un color + leyenda; filtra a ``vehiculos`` si se pasa."""
+    color_de = _colores_por_veh(esc)
+    vehs = [v for v in esc["rutas"] if vehiculos is None or v in set(vehiculos)]
+    st.pydeck_chart(construir_deck(_capas_rutas(esc, vehs, color_de), esc["hub"]),
+                    use_container_width=True)
+    _leyenda(color_de, vehs)
+
+
+def _mapa_ini_fin(esc_ini, esc_fin, vehs):
+    """Mapa que superpone, por camion, la ruta INICIAL (gris) y la FINAL re-planificada (color)."""
+    hub = esc_fin["hub"]
+    color_de = _colores_por_veh(esc_fin)
+
+    def geom(esc, v):
+        return esc["geometrias"].get(v) or ([[hub["lon"], hub["lat"]]]
+               + [[p["coord"][1], p["coord"][0]] for p in esc["rutas"][v]])
+
+    rutas_ini = [{"vehiculo_id": f"{v} inicial", "path": geom(esc_ini, v),
+                  "color": [152, 162, 179]} for v in vehs if v in esc_ini["rutas"]]
+    rutas_fin = [{"vehiculo_id": f"{v} final", "path": geom(esc_fin, v),
+                  "color": color_de[v]} for v in vehs if v in esc_fin["rutas"]]
+    stops = [{"lon": p["coord"][1], "lat": p["coord"][0], "color": color_de[v],
+              "pedido_id": p["pedido_id"], "vehiculo_id": v}
+             for v in vehs for p in esc_fin["rutas"].get(v, [])]
+    capas = [
+        pdk.Layer("PathLayer", pd.DataFrame(rutas_ini), get_path="path", get_color="color",
+                  width_min_pixels=2, get_width=3, pickable=True),
+        pdk.Layer("PathLayer", pd.DataFrame(rutas_fin), get_path="path", get_color="color",
+                  width_min_pixels=4, get_width=5, pickable=True),
+        pdk.Layer("ScatterplotLayer", pd.DataFrame(stops), get_position=["lon", "lat"],
+                  get_fill_color="color", get_radius=95, radius_min_pixels=4, stroked=True,
+                  get_line_color=[255, 255, 255], line_width_min_pixels=1, pickable=True),
+        pdk.Layer("ScatterplotLayer", pd.DataFrame([{"lon": hub["lon"], "lat": hub["lat"]}]),
+                  get_position=["lon", "lat"], get_fill_color=[12, 17, 29], get_radius=180,
+                  radius_min_pixels=7)]
+    st.pydeck_chart(construir_deck(capas, hub), use_container_width=True)
+    st.markdown('<div style="font-size:12px;color:#475467;">'
+                '<span style="display:inline-block;width:14px;height:3px;background:#98A2B3;'
+                'vertical-align:middle;"></span> ruta inicial &nbsp;&nbsp; '
+                '<span style="display:inline-block;width:14px;height:4px;background:#1570EF;'
+                'vertical-align:middle;"></span> ruta final re-planificada (color del camion)'
+                '</div>', unsafe_allow_html=True)
 
 
 def _paso_motor():
@@ -227,7 +299,7 @@ def _paso_motor():
             filtro = st.multiselect("Filtrar camiones en el mapa", vehs, default=vehs,
                                     key="df_mapveh",
                                     help="Selecciona uno o mas vehiculos para aislar su ruta.")
-            _mapa_escenario(esc, vehiculos=filtro or vehs)
+            _mapa_coloreado(esc, vehiculos=filtro or vehs)
     with mc2:
         if es_robusto(res) and ev is not None:
             st.plotly_chart(fig_robustez_por_escenario(ev), use_container_width=True, config=PLOT_CFG)
@@ -306,14 +378,26 @@ def _resultados(esc_ini, esc_inc, esc_fin, incidencias):
 
     with tab_cmp:
         cmp = comparar_rutas(esc_inc, esc_fin)
-        solo_cambio = st.toggle("Solo camiones con ruta cambiada", value=False, key="df_cmpfilt")
-        vista = cmp[cmp["cambiada"]] if solo_cambio else cmp
+        tc = tabla_por_camion(esc_fin)
         n_cambio = int(cmp["cambiada"].sum())
         rec = int(cmp["delta_a_tiempo"].clip(lower=0).sum())
-        st.caption(f"{n_cambio} de {len(cmp)} camiones re-secuenciados · "
-                   f"+{rec} entregas a tiempo recuperadas por el re-ruteo recomendado.")
+        st.caption(f"{n_cambio} de {len(cmp)} camiones re-secuenciados por el re-ruteo "
+                   f"recomendado · +{rec} entregas a tiempo recuperadas.")
+
+        cambiados = cmp[cmp["cambiada"]]["vehiculo_id"].tolist()
+        opciones = (["Solo camiones cambiados"] if cambiados else []) + list(esc_fin["rutas"].keys())
+        sel = st.selectbox("Ver en el mapa", opciones, key="df_cmpveh")
+        vehs = cambiados if sel == "Solo camiones cambiados" else [sel]
+        if vehs:
+            _mapa_ini_fin(esc_inc, esc_fin, vehs)
+
+        vista = cmp[cmp["vehiculo_id"].isin(vehs)] if sel != "Solo camiones cambiados" or cambiados else cmp
+        st.markdown("**Comparacion de secuencias**")
         st.dataframe(vista[["vehiculo_id", "cambiada", "orden_inicial", "orden_final",
                             "delta_a_tiempo", "delta_tardanza_min"]],
+                     use_container_width=True, hide_index=True)
+        st.markdown("**Resumen del/los camion(es)**")
+        st.dataframe(tc[tc["vehiculo_id"].isin(vehs)] if vehs else tc,
                      use_container_width=True, hide_index=True)
 
 
