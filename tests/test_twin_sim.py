@@ -1,8 +1,9 @@
 """Pruebas del gemelo operativo: incidencias aleatorias, alertas dinamicas y re-ruteo."""
 from core.demo_scenario import construir_escenario_demo
-from core.twin_sim import (aplicar_propuestas, mitigar_con_reruteo, proponer_reruteo,
-                           resumen_operacion, simular_incidencias, tabla_alertas,
-                           tabla_operacion)
+from core.twin_sim import (agregados_incidencias, aplicar_propuestas, comparar_rutas,
+                           mitigar_con_reruteo, proponer_reruteo, resumen_operacion,
+                           simular_incidencias, tabla_alertas, tabla_incidencias,
+                           tabla_operacion, tabla_por_camion, variabilidad_operacion)
 
 
 def _esc():
@@ -69,6 +70,57 @@ def test_propuesta_siempre_mejora():
         assert (p["tarde_propuesto"], p["tard_propuesto_min"]) \
             <= (p["tarde_actual"], p["tard_actual_min"])
         assert p["orden_propuesto"] != p["orden_actual"] or p["reduccion_min"] > 0
+
+
+def test_otif_menor_o_igual_que_otd_y_por_pedido():
+    esc, inc = simular_incidencias(_esc(), tasa=0.25, seed=6)
+    r = resumen_operacion(esc, inc)
+    assert 0.0 <= r["otif"] <= r["otd"] <= 1.0          # a tiempo Y completo <= a tiempo
+    df = tabla_operacion(esc)
+    # OTIF por pedido = a_tiempo Y primer intento; nunca True si la entrega fallo o llego tarde
+    assert not (df["otif"] & (~df["a_tiempo"])).any()
+    assert not (df["otif"] & (~df["primer_intento_ok"])).any()
+    # fallidas de primer intento = ausencias
+    ausencias = sum(1 for x in inc if x["afecta_otif"])
+    assert r["fallidas_primer_intento"] == ausencias
+
+
+def test_incidencias_traen_causa_tipificada():
+    esc, inc = simular_incidencias(_esc(), tasa=0.3, seed=2)
+    from core.twin_sim import CATALOGO_INCIDENCIAS
+    tipos_validos = {c["tipo"] for c in CATALOGO_INCIDENCIAS}
+    assert inc and all(x["tipo"] in tipos_validos for x in inc)
+    assert all(x["severidad"] in ("baja", "media", "alta") for x in inc)
+    ti = tabla_incidencias(inc)
+    assert {"tipo", "descripcion", "severidad", "franja", "retraso_min"} <= set(ti.columns)
+    ag = agregados_incidencias(inc)
+    assert ag["impacto_total_min"] > 0 and not ag["por_tipo"].empty
+
+
+def test_por_camion_coherente():
+    esc, _ = simular_incidencias(_esc(), tasa=0.2, seed=4)
+    tc = tabla_por_camion(esc)
+    assert (tc["a_tiempo"] + tc["fuera_ventana"] == tc["pedidos"]).all()
+    assert ((tc["otd"] >= 0) & (tc["otd"] <= 1)).all()
+    assert ((tc["otif"] <= tc["otd"] + 1e-9)).all()
+    assert (tc["distancia_km"] > 0).all()
+
+
+def test_comparar_rutas_marca_cambios():
+    esc_sin, _ = simular_incidencias(_esc(), tasa=0.25, seed=8)
+    esc_con, _ = mitigar_con_reruteo(esc_sin)
+    cmp = comparar_rutas(esc_sin, esc_con)
+    assert len(cmp) == len(esc_sin["rutas"])
+    # un vehiculo marcado 'cambiada' debe tener distinto orden
+    for _, row in cmp[cmp["cambiada"]].iterrows():
+        assert row["orden_inicial"] != row["orden_final"]
+
+
+def test_variabilidad_operacion_no_negativa():
+    va = variabilidad_operacion(_esc(), tasa=0.2, n_corridas=12, seed=0)
+    assert va["n"] == 12
+    assert va["otd_std"] >= 0.0 and 0.0 <= va["otd_medio"] <= 1.0
+    assert len(va["muestras"]) == 12
 
 
 def test_reruteo_conserva_todos_los_pedidos():

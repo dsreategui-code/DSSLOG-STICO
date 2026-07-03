@@ -60,10 +60,17 @@ def evaluar_robusto(resultado: dict, modelo, pedidos: Sequence, incidencias: Seq
         kmc = kpis_montecarlo(muestras, iri_df)
         tard = tardanza_por_escenario(muestras)
         score = float(np.mean(tard) + beta * cvar(tard, alpha)) if tard.size else 0.0
+        # Variabilidad del nivel de servicio: desviacion estandar del OTD ENTRE escenarios
+        # Monte Carlo (menor = operacion mas consistente; es el objetivo del DSS).
+        otd_esc = otd_por_escenario(muestras)
+        variab_otd = float(np.std(otd_esc)) if otd_esc is not None and len(otd_esc) else 0.0
         por_config[cfg.nombre] = {
             "otd": kmc.get("otd", 0.0),
-            "otd_peor_dia": round(float(otd_por_escenario(muestras).min()), 4) if muestras is not None and not muestras.empty else 0.0,
+            "otif": kmc.get("otif", 0.0),
+            "otd_peor_dia": round(float(otd_esc.min()), 4) if len(otd_esc) else 0.0,
+            "variab_otd": round(variab_otd, 4),
             "tardanza_prom_min": kmc.get("tardanza_prom_min", 0.0),
+            "tardanza_std_min": kmc.get("tardanza_std_min", 0.0),
             "cvar_tardanza_min": round(cvar(tard, alpha), 2),
             "var_tardanza_min": round(var(tard, alpha), 2),
             "pedidos_en_riesgo": kmc.get("pedidos_en_riesgo", 0),
@@ -82,7 +89,9 @@ def evaluar_robusto(resultado: dict, modelo, pedidos: Sequence, incidencias: Seq
         "score_robusto": peor["score"],          # DRO: peor caso ajustado por riesgo (menor=mejor)
         "config_peor_caso": peor_nombre,
         "otd_nominal": nominal["otd"],
+        "otif_nominal": nominal["otif"],
         "otd_peor": peor["otd"],
+        "variabilidad_otd": nominal["variab_otd"],
         "cvar_nominal_min": nominal["cvar_tardanza_min"],
         "cvar_peor_min": peor["cvar_tardanza_min"],
         "pedidos_en_riesgo_nominal": nominal["pedidos_en_riesgo"],
@@ -93,7 +102,8 @@ def evaluar_robusto(resultado: dict, modelo, pedidos: Sequence, incidencias: Seq
         "resultado": resultado,
         # 'kpis' plano para compatibilidad con los reportes/vistas existentes.
         "kpis": {
-            "cobertura": cobertura, "otd": nominal["otd"], "otd_peor": peor["otd"],
+            "cobertura": cobertura, "otd": nominal["otd"], "otif": nominal["otif"],
+            "otd_peor": peor["otd"], "variabilidad": nominal["variab_otd"],
             "tardanza_prom_min": nominal["tardanza_prom_min"],
             "cvar_nominal_min": nominal["cvar_tardanza_min"],
             "cvar_peor_min": peor["cvar_tardanza_min"],

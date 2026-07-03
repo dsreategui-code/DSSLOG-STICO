@@ -10,9 +10,9 @@ from typing import Optional
 
 import pandas as pd
 
-COLUMNAS_CANDIDATAS = ["perfil", "cobertura", "otd", "otif", "tardanza_prom_min",
-                       "tardanza_p90_min", "pedidos_en_riesgo", "distancia_km",
-                       "tiempo_max_min", "n_rutas"]
+COLUMNAS_CANDIDATAS = ["perfil", "cobertura", "otd", "otif", "otd_peor", "variabilidad",
+                       "tardanza_prom_min", "cvar_nominal_min", "cvar_peor_min",
+                       "pedidos_en_riesgo", "distancia_km", "score_robusto"]
 
 
 def tabla_candidatas(resultado: dict) -> pd.DataFrame:

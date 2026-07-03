@@ -172,7 +172,14 @@ def planificar(contexto: dict, *, fecha: Optional[str] = None, osrm=None,
     elegida = reco.get("elegida") or next(
         (e for e in evaluaciones if e["perfil"] == reco["recomendada"]),
         evaluaciones[0] if evaluaciones else None)
-    escenario = _escenario_desde_evaluacion(contexto, pedidos, modelo, elegida)
+
+    # Escenario del gemelo POR candidata (para que el usuario elija cual animar).
+    escenarios = {}
+    for e in evaluaciones:
+        if e.get("resultado"):
+            escenarios[e["perfil"]] = _escenario_desde_evaluacion(contexto, pedidos, modelo, e)
+    escenario = escenarios.get(reco["recomendada"]) or (
+        _escenario_desde_evaluacion(contexto, pedidos, modelo, elegida) if elegida else None)
 
     return {
         "factible": True, "factibilidad": feas, "modo": modo,
@@ -181,6 +188,6 @@ def planificar(contexto: dict, *, fecha: Optional[str] = None, osrm=None,
         "evaluaciones": evaluaciones, "recomendacion": reco,
         "perfil_recomendado": reco["recomendada"],
         "iri_recomendada": elegida["iri"] if elegida else None,
-        "escenario": escenario, "n_pedidos": len(pedidos),
+        "escenario": escenario, "escenarios": escenarios, "n_pedidos": len(pedidos),
         "ambiguedad": ambiguedad_nombres,
     }
