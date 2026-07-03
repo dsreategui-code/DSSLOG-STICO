@@ -39,7 +39,7 @@ def _init():
     ss.setdefault("df_ctx", None)
     ss.setdefault("df_plan", None)
     ss.setdefault("df_perfil", None)
-    ss.setdefault("df_tasa", 12)
+    ss.setdefault("df_tasa", 20)
     ss.setdefault("df_seed", 7)
     ss.setdefault("df_conductor", False)
 
@@ -117,35 +117,44 @@ def _paso_datos():
 
 # ------------------------------------------------------------------ Paso 2: Parametros
 def _paso_params():
-    st.markdown("#### Paso 2 · Configuracion de parametros del motor")
+    st.markdown("#### Paso 2 · Configuracion de parametros")
     ctx = _ctx()
     par = ctx["parametros"]
     n_total = len(ctx["pedidos"])
-    c1, c2 = st.columns(2)
-    n_plan = c1.slider("Pedidos a planificar", 4, n_total, min(20, n_total), key="df_nplan",
-                       help="Subconjunto para una corrida agil (el solver y la simulacion "
-                            "escalan con el tamano).")
+    st.caption("Parametros operativos de la jornada. El motor aplica ALNS y evaluacion robusta "
+               "(DRO) de forma intrinseca, y ya incorpora los **tiempos de servicio** por tipo "
+               "de pedido (estandar 8, subida 18, instalacion 25 min) desde el dataset.")
+    c1, c2, c3 = st.columns(3)
+    n_plan = c1.slider("Tamano de la jornada (nº pedidos)", 4, n_total, min(40, n_total),
+                       key="df_nplan", help="Cuantos pedidos entran a la jornada. Mas pedidos = "
+                       "operacion mas realista (y planificacion algo mas lenta).")
     fechas = ["(sin evento)"] + sorted({e.fecha for e in ctx["eventos"]})
-    fecha = c2.selectbox("Fecha (calendario de eventos)", fechas, key="df_fecha")
-    c3, c4, c5 = st.columns(3)
-    nivel = c3.slider("Nivel de servicio (α)", 0.80, 0.975, float(par.nivel_servicio), 0.005,
-                      key="df_alpha", help="Chance-constraint de las ventanas: mayor α = mas "
-                      "colchon de tiempo para cumplir.")
-    cv = c4.slider("CV del tiempo de viaje", 0.10, 0.45, float(par.cv_tiempo), 0.01,
-                   key="df_cv", help="Variabilidad relativa del tiempo de viaje asumida.")
-    radio = c5.selectbox("Radio de ambiguedad (DRO)", ["bajo", "medio", "alto"],
-                         index=1, key="df_radio",
-                         help="Amplitud del conjunto de escenarios 'Lima peor' contra el que "
-                              "se estresa cada candidata.")
-    usar_alns = st.toggle("Usar ALNS (metaheuristica de mejora)", value=bool(par.usar_alns),
-                          key="df_alns")
+    fecha = c2.selectbox("Fecha (calendario de eventos)", fechas, key="df_fecha",
+                         help="Los eventos (campanas, feriados) ajustan el trafico esperado.")
+    nivel = c3.slider("Nivel de servicio objetivo (α)", 0.80, 0.975, float(par.nivel_servicio),
+                      0.005, key="df_alpha", help="Chance-constraint de las ventanas: mayor α = "
+                      "mas colchon de tiempo para cumplir la promesa de entrega.")
+    with st.expander("Opciones avanzadas (modelado de incertidumbre)"):
+        ca, cb = st.columns(2)
+        cv = ca.slider("CV del tiempo de viaje", 0.10, 0.45, float(par.cv_tiempo), 0.01,
+                       key="df_cv", help="Variabilidad relativa del tiempo de viaje asumida.")
+        radio = cb.selectbox("Radio de ambiguedad (DRO)", ["bajo", "medio", "alto"], index=1,
+                             key="df_radio", help="Amplitud del conjunto de escenarios 'Lima "
+                             "peor' contra el que se estresa cada candidata.")
     st.session_state.df_cfg = {"n_plan": int(n_plan), "fecha": fecha, "nivel": float(nivel),
-                               "cv": float(cv), "radio": radio, "usar_alns": bool(usar_alns)}
+                               "cv": float(cv), "radio": radio}
     _nav(siguiente_label="Optimizar rutas iniciales →", siguiente_ok=True)
 
 
 # ------------------------------------------------------------------ Paso 3: Motor
-def _mapa_escenario(esc):
+def _mapa_escenario(esc, vehiculos=None):
+    """Dibuja rutas + pedidos + hub; si se pasa ``vehiculos``, filtra a ese subconjunto."""
+    if vehiculos is not None:
+        sel = set(vehiculos)
+        esc = {**esc,
+               "rutas": {v: r for v, r in esc["rutas"].items() if v in sel},
+               "geometrias": {v: g for v, g in esc["geometrias"].items() if v in sel},
+               "vehiculos": [v for v in esc["vehiculos"] if v in sel]}
     df_ped = estado_pedidos_en_tick(esc, float(esc["jornada_fin_min"]))
     layers = [capa_rutas(esc), capa_pedidos(df_ped), capa_hub(esc["hub"])]
     st.pydeck_chart(construir_deck(layers, esc["hub"]), use_container_width=True)
@@ -159,7 +168,7 @@ def _paso_motor():
         par = ctx["parametros"]
         par.nivel_servicio = cfg.get("nivel", par.nivel_servicio)
         par.cv_tiempo = cfg.get("cv", par.cv_tiempo)
-        par.usar_alns = cfg.get("usar_alns", par.usar_alns)
+        par.usar_alns = True                     # ALNS intrinseco (siempre activo)
         par.usar_osrm = bool(par.usar_osrm)
         fecha = None if cfg.get("fecha", "(sin evento)") == "(sin evento)" else cfg["fecha"]
         with st.spinner("Generando candidatas + evaluacion robusta (DRO)..."):
@@ -214,7 +223,11 @@ def _paso_motor():
         st.markdown("**Ruta de la candidata seleccionada**")
         esc = res["escenarios"].get(sel)
         if esc:
-            _mapa_escenario(esc)
+            vehs = list(esc["rutas"].keys())
+            filtro = st.multiselect("Filtrar camiones en el mapa", vehs, default=vehs,
+                                    key="df_mapveh",
+                                    help="Selecciona uno o mas vehiculos para aislar su ruta.")
+            _mapa_escenario(esc, vehiculos=filtro or vehs)
     with mc2:
         if es_robusto(res) and ev is not None:
             st.plotly_chart(fig_robustez_por_escenario(ev), use_container_width=True, config=PLOT_CFG)

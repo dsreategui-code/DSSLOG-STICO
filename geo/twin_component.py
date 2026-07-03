@@ -13,7 +13,7 @@ import json
 import math
 
 from core.demo_scenario import VELOCIDAD_KMH
-from core.twin_sim import proponer_reruteo
+from core.twin_sim import _franja, _hhmm, proponer_reruteo
 
 
 def _fit_view(lons, lats, w: int = 720, h: int = 460) -> dict:
@@ -47,7 +47,7 @@ def _datos_gemelo(escenario: dict) -> dict:
     lons, lats = [hub["lon"]], [hub["lat"]]
     vehiculos = []
     for veh, paradas in escenario["rutas"].items():
-        stops, inc_idx = [], -1
+        stops, inc_idx, inc_info = [], -1, None
         for i, p in enumerate(paradas):
             lon, lat = p["coord"][1], p["coord"][0]
             lons.append(lon)
@@ -59,20 +59,24 @@ def _datos_gemelo(escenario: dict) -> dict:
                           "distrito": p.get("distrito", "-")})
             if p.get("incidencia") and inc_idx < 0:
                 inc_idx = i
+                t = float(p.get("t_incidencia") or p["eta_min"])
+                inc_info = {"tipo": p.get("incidencia_tipo"),
+                            "desc": p.get("incidencia_desc") or "Incidencia",
+                            "sev": p.get("incidencia_sev") or "media",
+                            "distrito": p.get("distrito", "-"), "franja": _franja(t),
+                            "hora": _hhmm(t), "min": float(p.get("incidencia_min", 0.0)),
+                            "pid": p["pedido_id"]}
         prop = props.get(veh)
         card = None
         orden_prop = None
         if prop is not None:
             orden_prop = prop["orden_propuesto"]
-            card = {"hora": prop["incidencia_hora"], "distrito": prop["incidencia_distrito"],
-                    "incMin": prop["incidencia_min"], "nPend": prop["n_pendientes"],
-                    "desc": prop["incidencia_desc"], "sev": prop["incidencia_sev"],
-                    "franja": prop["incidencia_franja"], "tipo": prop.get("incidencia_tipo"),
+            card = {"nPend": prop["n_pendientes"],
                     "tardeAct": prop["tarde_actual"], "tardAct": prop["tard_actual_min"],
                     "tardeProp": prop["tarde_propuesto"], "tardProp": prop["tard_propuesto_min"],
                     "recuperadas": prop["recuperadas"], "reduccion": prop["reduccion_min"]}
         vehiculos.append({"veh": veh, "stops": stops, "incIdx": inc_idx,
-                          "ordenProp": orden_prop, "card": card})
+                          "ordenProp": orden_prop, "card": card, "inc": inc_info})
     return {"hub": hub, "t0": t0, "speed": float(VELOCIDAD_KMH), "vehiculos": vehiculos,
             "colores": VEHCOL, "view": _fit_view(lons, lats)}
 
@@ -155,11 +159,18 @@ _PLANTILLA = r"""
         prev=s;}
       return [prev.lon,prev.lat];
     }
+    function incActivo(v,lt){
+      if(v.incIdx<0||!v.inc)return false;
+      if(awaiting(v))return true;                         // paralizado por decision
+      var a=v.arrOf[v.incIdx],s=v.stops[v.incIdx];
+      return lt>=a&&lt<a+s.serv+s.incMin;                 // atendiendo la parada con incidencia
+    }
     function estadoStop(v,si,lt){
       var a=v.arrOf[si],s=v.stops[si];
       if(a===undefined)return 'pendiente';
       if(lt>=a+s.serv+s.incMin)return 'entregado';
-      if(si===v.incIdx&&awaiting(v))return 'incidencia';
+      // Cualquier parada con incidencia se pinta roja mientras se atiende (o si esta paralizada).
+      if((s.incMin>0&&lt>=a&&lt<a+s.serv+s.incMin)||(si===v.incIdx&&awaiting(v)))return 'incidencia';
       if(lt>=a)return 'en_servicio';
       var conocido=(v.decided||(v.tInc>=0&&lt>=v.tInc));
       if(conocido&&a>s.vfin)return 'en_riesgo';
@@ -195,17 +206,19 @@ _PLANTILLA = r"""
 
     function buildAlerts(){
       var box=document.getElementById('alerts');var html='';var sevcol={alta:'#B42318',media:'#B54708',baja:'#475467'};
-      for(var i=0;i<V.length;i++){var v=V[i];if(!awaiting(v))continue;var c=v.card;var sc=sevcol[c.sev]||'#B54708';
-        html+='<div style="background:#fff;border:1px solid #EAECF0;border-left:4px solid '+sc+';border-radius:10px;padding:12px 14px;box-shadow:0 1px 3px rgba(16,24,40,.06);font-size:13px;">'
-          +'<div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:'+sc+';display:inline-block;"></span><b>'+v.veh+' &middot; '+c.desc+'</b><span style="margin-left:auto;font-size:11px;color:#fff;background:'+sc+';border-radius:20px;padding:2px 8px;">severidad '+c.sev+'</span></div>'
-          +'<div style="color:#475467;margin:4px 0 8px;">'+c.distrito+' &middot; franja '+c.franja+' &middot; '+c.hora+' &middot; +'+Math.round(c.incMin)+' min</div>'
-          +'<div style="color:#344054;margin-bottom:8px;"><b>Impacto:</b> '+c.nPend+' paradas pendientes, '+c.tardeAct+' quedarian fuera de ventana. <b>Propuesta del motor:</b> re-secuenciar &rarr; '+(c.recuperadas>0?('recupera '+c.recuperadas+' entrega(s), '):'')+'-'+Math.round(c.reduccion)+' min.</div>'
-          +'<div style="display:flex;gap:8px;">'
-            +'<button data-i="'+i+'" data-a="ap" style="flex:1;padding:7px;border:0;border-radius:8px;background:#027A48;color:#fff;cursor:pointer;font-size:12.5px;font-weight:600;">Aprobar re-ruteo</button>'
-            +'<button data-i="'+i+'" data-a="de" style="flex:1;padding:7px;border:1px solid #D0D5DD;border-radius:8px;background:#fff;cursor:pointer;font-size:12.5px;">Mantener ruta</button>'
-          +'</div></div>';
+      for(var i=0;i<V.length;i++){var v=V[i];if(!incActivo(v,localT(v)))continue;var c=v.inc;var sc=sevcol[c.sev]||'#B54708';
+        var head='<div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:'+sc+';display:inline-block;"></span><b>'+v.veh+' &middot; '+c.desc+'</b><span style="margin-left:auto;font-size:11px;color:#fff;background:'+sc+';border-radius:20px;padding:2px 8px;">severidad '+c.sev+'</span></div>'
+          +'<div style="color:#475467;margin:4px 0 8px;">'+c.distrito+' &middot; franja '+c.franja+' &middot; '+c.hora+' &middot; +'+Math.round(c.min)+' min &middot; pedido '+c.pid+'</div>';
+        if(v.card&&!v.decided){var p=v.card;
+          html+='<div style="background:#fff;border:1px solid #EAECF0;border-left:4px solid '+sc+';border-radius:10px;padding:12px 14px;box-shadow:0 1px 3px rgba(16,24,40,.06);font-size:13px;">'+head
+            +'<div style="color:#344054;margin-bottom:8px;"><b>Impacto:</b> '+p.nPend+' paradas pendientes, '+p.tardeAct+' quedarian fuera de ventana. <b>Propuesta del motor:</b> re-secuenciar &rarr; '+(p.recuperadas>0?('recupera '+p.recuperadas+' entrega(s), '):'')+'-'+Math.round(p.reduccion)+' min.</div>'
+            +'<div style="display:flex;gap:8px;"><button data-i="'+i+'" data-a="ap" style="flex:1;padding:7px;border:0;border-radius:8px;background:#027A48;color:#fff;cursor:pointer;font-size:12.5px;font-weight:600;">Aprobar re-ruteo</button><button data-i="'+i+'" data-a="de" style="flex:1;padding:7px;border:1px solid #D0D5DD;border-radius:8px;background:#fff;cursor:pointer;font-size:12.5px;">Mantener ruta</button></div></div>';
+        }else{
+          var nota=v.applied?'Re-ruteo aprobado y aplicado.':(v.decided?'Ruta original mantenida.':'Sin re-secuenciacion que mejore: la demora se absorbe en la ruta.');
+          html+='<div style="background:#fff;border:1px solid #EAECF0;border-left:4px solid '+sc+';border-radius:10px;padding:12px 14px;font-size:13px;">'+head+'<div style="color:#475467;">'+nota+'</div></div>';
+        }
       }
-      if(!html){html='<div style="color:#667085;font-size:12.5px;padding:4px 2px;">'+(started?'Sin alertas activas. Las incidencias con re-ruteo apareceran aqui cuando ocurran.':'Pulsa Iniciar para arrancar la jornada. Las alertas apareceran aqui.')+'</div>';}
+      if(!html){html='<div style="color:#667085;font-size:12.5px;padding:4px 2px;">'+(started?'Sin incidencias activas en este momento.':'Pulsa Iniciar para arrancar la jornada. Las alertas apareceran aqui.')+'</div>';}
       box.innerHTML=html;
       var bts=box.querySelectorAll('button');
       for(var j=0;j<bts.length;j++){bts[j].onclick=function(){decide(parseInt(this.getAttribute('data-i')),this.getAttribute('data-a'));};}
@@ -218,13 +231,13 @@ _PLANTILLA = r"""
         for(var k=0;k<v.order.length;k++){var s=v.stops[v.order[k]];path.push([s.lon,s.lat]);ts.push(v.arr[k]);}
         layers.push(new deck.TripsLayer({id:'tr'+i,data:[{path:path,ts:ts}],getPath:function(d){return d.path;},getTimestamps:function(d){return d.ts;},getColor:col,opacity:0.6,widthMinPixels:3,trailLength:60,currentTime:lt}));
         layers.push(new deck.ScatterplotLayer({id:'vh'+i,data:[v],getPosition:function(d){return posAt(d,localT(d));},getFillColor:col,getRadius:150,radiusMinPixels:6,radiusMaxPixels:13,stroked:true,getLineColor:[255,255,255],lineWidthMinPixels:2,updateTriggers:{getPosition:lt}}));
-        if(awaiting(v)){var ip=v.stops[v.incIdx];layers.push(new deck.ScatterplotLayer({id:'rg'+i,data:[ip],getPosition:function(d){return [d.lon,d.lat];},filled:false,stroked:true,getLineColor:[217,45,32],lineWidthMinPixels:2,getRadius:400+260*Math.abs(Math.sin(simT/2.2)),radiusMinPixels:12,radiusMaxPixels:46,updateTriggers:{getRadius:simT}}));nAlert++;}
+        if(incActivo(v,lt)){var ip=v.stops[v.incIdx];layers.push(new deck.ScatterplotLayer({id:'rg'+i,data:[ip],getPosition:function(d){return [d.lon,d.lat];},filled:false,stroked:true,getLineColor:[217,45,32],lineWidthMinPixels:2,getRadius:400+260*Math.abs(Math.sin(simT/2.2)),radiusMinPixels:12,radiusMaxPixels:46,updateTriggers:{getRadius:simT}}));nAlert++;}
         for(var k2=0;k2<v.stops.length;k2++){var st=estadoStop(v,k2,lt);var s2=v.stops[k2];var a2=v.arrOf[k2];
           pd.push({lon:s2.lon,lat:s2.lat,c:COL[st]});
           if(a2!==undefined&&lt>=a2+s2.serv+s2.incMin){done_n++;if(a2<=s2.vfin)aTiempo++;else tard+=(a2-s2.vfin);}
         }
         total+=v.stops.length;
-        if(v.card&&(v.decided||(v.tInc>=0&&lt>=v.tInc)))incVistas++;
+        if(v.incIdx>=0&&v.tInc>=0&&lt>=v.tInc)incVistas++;
       }
       layers.push(new deck.ScatterplotLayer({id:'pd',data:pd,getPosition:function(d){return [d.lon,d.lat];},getFillColor:function(d){return d.c;},getRadius:85,radiusMinPixels:4,radiusMaxPixels:10,stroked:true,getLineColor:[255,255,255],lineWidthMinPixels:1,updateTriggers:{getFillColor:simT}}));
       layers.push(new deck.ScatterplotLayer({id:'hb',data:[DATA.hub],getPosition:function(d){return [d.lon,d.lat];},getFillColor:[12,17,29],getRadius:180,radiusMinPixels:7}));
@@ -233,9 +246,9 @@ _PLANTILLA = r"""
       document.getElementById('live').innerHTML=
         tile('Entregados',done_n+'/'+total)
         +tile('OTD acumulado',otd+'%',otd>=90?'#027A48':(otd>=75?'#B54708':'#B42318'))
-        +tile('Alertas activas',nAlert,nAlert>0?'#B42318':'#0C111D')
-        +tile('Tardanza acum.',Math.round(tard)+' min');
-      var sig='';for(var i2=0;i2<V.length;i2++){sig+=(awaiting(V[i2])?('1'+V[i2].applied):'0');}
+        +tile('Incidencias',incVistas,incVistas>0?'#B54708':'#0C111D')
+        +tile('Alertas activas',nAlert,nAlert>0?'#B42318':'#0C111D');
+      var sig='';for(var i2=0;i2<V.length;i2++){var vv=V[i2];sig+=(incActivo(vv,localT(vv))?((awaiting(vv)?'A':'I')+(vv.applied?'1':'0')):'0');}
       if(sig!==sigAlert){sigAlert=sig;buildAlerts();}
       document.getElementById('clk').textContent=done?'Jornada completada':hhmm(simT);
     }
