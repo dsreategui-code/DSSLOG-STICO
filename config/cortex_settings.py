@@ -29,16 +29,23 @@ OSRM_BASE_URL = os.environ.get("OSRM_BASE_URL", "http://localhost:5000")
 
 def resolver_osrm_url() -> str:
     """URL de OSRM en tiempo de ejecucion (llamar al crear el cliente, no al importar).
-    Prioridad: env OSRM_BASE_URL -> st.secrets['OSRM_BASE_URL'] (Streamlit Cloud) -> default."""
+    Prioridad: env OSRM_BASE_URL -> st.secrets['OSRM_BASE_URL'] (Streamlit Cloud) -> default.
+
+    Solo consulta st.secrets si EXISTE un secrets.toml, para no emitir el aviso
+    'No secrets files found' cuando se corre local sin secrets (p. ej. con OSRM en localhost)."""
     v = os.environ.get("OSRM_BASE_URL")
     if v:
         return v
-    try:
-        import streamlit as st
-        if "OSRM_BASE_URL" in st.secrets:
-            return str(st.secrets["OSRM_BASE_URL"])
-    except Exception:  # noqa: BLE001  (sin runtime de Streamlit / sin secrets)
-        pass
+    from pathlib import Path
+    rutas = [Path.home() / ".streamlit" / "secrets.toml",
+             Path.cwd() / ".streamlit" / "secrets.toml"]
+    if any(p.exists() for p in rutas):
+        try:
+            import streamlit as st
+            if "OSRM_BASE_URL" in st.secrets:
+                return str(st.secrets["OSRM_BASE_URL"])
+        except Exception:  # noqa: BLE001
+            pass
     return OSRM_BASE_URL
 OSRM_PROFILE = os.environ.get("OSRM_PROFILE", "driving")
 OSRM_TIMEOUT_S = 30
