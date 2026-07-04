@@ -21,9 +21,15 @@ for _d in (CACHE_DIR, OSRM_CACHE_DIR):
 # Se puede sobrescribir con la variable de entorno OSRM_BASE_URL.
 import os
 
-def _leer_osrm_url() -> str:
-    """Endpoint de OSRM. Prioridad: variable de entorno OSRM_BASE_URL -> secrets de Streamlit
-    (para Streamlit Community Cloud, donde se define OSRM_BASE_URL en Secrets) -> localhost."""
+# NOTA: no se debe tocar st.secrets al IMPORTAR este modulo (correria antes de
+# st.set_page_config y Streamlit falla). Al importar solo se usa la variable de entorno; el
+# secret de Streamlit Cloud se resuelve en tiempo de EJECUCION via resolver_osrm_url().
+OSRM_BASE_URL = os.environ.get("OSRM_BASE_URL", "http://localhost:5000")
+
+
+def resolver_osrm_url() -> str:
+    """URL de OSRM en tiempo de ejecucion (llamar al crear el cliente, no al importar).
+    Prioridad: env OSRM_BASE_URL -> st.secrets['OSRM_BASE_URL'] (Streamlit Cloud) -> default."""
     v = os.environ.get("OSRM_BASE_URL")
     if v:
         return v
@@ -33,10 +39,7 @@ def _leer_osrm_url() -> str:
             return str(st.secrets["OSRM_BASE_URL"])
     except Exception:  # noqa: BLE001  (sin runtime de Streamlit / sin secrets)
         pass
-    return "http://localhost:5000"
-
-
-OSRM_BASE_URL = _leer_osrm_url()
+    return OSRM_BASE_URL
 OSRM_PROFILE = os.environ.get("OSRM_PROFILE", "driving")
 OSRM_TIMEOUT_S = 30
 # Velocidad de respaldo (km/h) SOLO para construir una matriz aproximada cuando no hay

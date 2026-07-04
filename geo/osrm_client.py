@@ -23,8 +23,8 @@ import numpy as np
 import pandas as pd
 import requests
 
-from config.cortex_settings import (OSRM_BASE_URL, OSRM_CACHE_DIR, OSRM_PROFILE,
-                                     OSRM_TIMEOUT_S)
+from config.cortex_settings import (OSRM_CACHE_DIR, OSRM_PROFILE, OSRM_TIMEOUT_S,
+                                     resolver_osrm_url)
 
 Coord = Tuple[float, float]  # (lat, lon)
 
@@ -43,9 +43,9 @@ def _clave(coords: Sequence[Coord], profile: str, kind: str) -> str:
 class OSRMClient:
     """Cliente HTTP fino sobre un servidor OSRM local, con cache en disco."""
 
-    def __init__(self, base_url: str = OSRM_BASE_URL, profile: str = OSRM_PROFILE,
+    def __init__(self, base_url: Optional[str] = None, profile: str = OSRM_PROFILE,
                  timeout: int = OSRM_TIMEOUT_S, cache_dir: Path = OSRM_CACHE_DIR):
-        self.base_url = base_url.rstrip("/")
+        self.base_url = (base_url or resolver_osrm_url()).rstrip("/")
         self.profile = profile
         self.timeout = timeout
         self.cache_dir = Path(cache_dir)
