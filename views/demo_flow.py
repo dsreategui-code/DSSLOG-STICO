@@ -158,17 +158,26 @@ def _paso_params():
 
 # ------------------------------------------------------------------ Paso 3: Motor
 def _osrm():
-    """Cliente OSRM cacheado en sesion (None si no esta disponible)."""
-    if "df_osrm_ok" not in st.session_state:
+    """Cliente OSRM si el servidor responde. Re-chequea SOLO hasta confirmarlo disponible y
+    luego cachea (asi toma OSRM en cuanto se levante, sin reiniciar, y no golpea al servidor
+    en cada render una vez confirmado; clave con el servidor publico en la nube)."""
+    if st.session_state.get("df_osrm_ok"):
+        return st.session_state.get("df_osrm")
+    cli = st.session_state.get("df_osrm")
+    if cli is None:
         try:
             from geo.osrm_client import OSRMClient
             cli = OSRMClient()
             st.session_state.df_osrm = cli
-            st.session_state.df_osrm_ok = cli.disponible()
         except Exception:  # noqa: BLE001
-            st.session_state.df_osrm = None
-            st.session_state.df_osrm_ok = False
-    return st.session_state.df_osrm if st.session_state.df_osrm_ok else None
+            return None
+    try:
+        if cli.disponible():
+            st.session_state.df_osrm_ok = True
+            return cli
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _enriquecer_geometrias(esc):
