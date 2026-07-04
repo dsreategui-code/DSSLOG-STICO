@@ -37,7 +37,8 @@ def _distancia(resultado: dict) -> float:
 
 def evaluar_robusto(resultado: dict, modelo, pedidos: Sequence, incidencias: Sequence,
                     zonas: Sequence, params, *, ambiguedad=None, alpha: float = 0.9,
-                    beta: float = 1.0, iteraciones: Optional[int] = None) -> dict:
+                    beta: float = 1.0, iteraciones: Optional[int] = None,
+                    franjas_td: Optional[Sequence] = None) -> dict:
     """Evalua una candidata sobre el conjunto de ambiguedad. Devuelve KPIs nominal y de peor
     caso, el score robusto (peor caso ajustado por riesgo) y el IRI nominal."""
     ambiguedad = ambiguedad or conjunto_ambiguedad("medio")
@@ -53,7 +54,9 @@ def evaluar_robusto(resultado: dict, modelo, pedidos: Sequence, incidencias: Seq
         ip, au = aplicar_config(incid_prob, ausencia, cfg)
         ctx = contexto_desde_resultado(resultado, modelo, incid_prob=ip,
                                        incid_delay_min=incid_delay, ausencia_prob=au,
-                                       sigma_viaje=cfg.sigma_viaje)
+                                       sigma_viaje=cfg.sigma_viaje,
+                                       sigma_sistemico=getattr(cfg, "sigma_sistemico", 0.0),
+                                       franjas_td=franjas_td)
         ctx.tiempo_min = ctx.tiempo_min * cfg.mult_congestion   # estresa los tiempos
         muestras = montecarlo(ctx, iteraciones=iters, semilla_base=semilla)
         iri_df = calcular_iri(muestras)

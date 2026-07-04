@@ -151,8 +151,11 @@ def planificar(contexto: dict, *, fecha: Optional[str] = None, osrm=None,
 
     if robusto:
         from core.robust_evaluation import evaluar_robusto, recomendar_robusto
-        from core.uncertainty import conjunto_ambiguedad
+        from core.uncertainty import conjunto_ambiguedad, perfil_td_franjas
         amb = conjunto_ambiguedad(radio_ambiguedad)
+        # Perfil de trafico dependiente de la hora (TD-VRP) para la simulacion de riesgo.
+        franjas_td = perfil_td_franjas(contexto["trafico"],
+                                       jornada_inicio=hub.hora_apertura, hora_ref=hora_ref)
         evaluaciones = []
         for cand in candidatas:
             res = cand["resultado"]
@@ -160,7 +163,7 @@ def planificar(contexto: dict, *, fecha: Optional[str] = None, osrm=None,
                 continue
             evaluaciones.append(evaluar_robusto(
                 res, modelo, pedidos, contexto["incidencias"], contexto["zonas"], params,
-                ambiguedad=amb, alpha=alpha, beta=beta))
+                ambiguedad=amb, alpha=alpha, beta=beta, franjas_td=franjas_td))
         reco = recomendar_robusto(evaluaciones)
         modo = f"robusto (DRO, radio={radio_ambiguedad})"
         ambiguedad_nombres = [c.nombre for c in amb]

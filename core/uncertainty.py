@@ -25,25 +25,59 @@ import numpy as np
 class ConfigIncertidumbre:
     """Una distribucion del conjunto de ambiguedad (escenario de incertidumbre)."""
     nombre: str
-    sigma_viaje: float          # dispersion log-normal del tiempo de viaje
+    sigma_viaje: float          # dispersion log-normal IDIOSINCRATICA del viaje (por tramo)
     mult_incidencia: float      # escala la probabilidad de incidencia
     mult_congestion: float      # escala (infla) los tiempos base
     mult_ausencia: float        # escala la probabilidad de ausencia
+    # Variabilidad SISTEMICA (correlacionada): un factor por DIA que afecta a todos los tramos
+    # a la vez (un dia de lluvia/paro pone lenta media Lima). Es la que NO se promedia y genera
+    # la variabilidad real del OTD dia a dia.
+    sigma_sistemico: float = 0.10
 
 
 def conjunto_ambiguedad(radio: str = "medio") -> List[ConfigIncertidumbre]:
     """Conjunto de ambiguedad DRO (variante parametrica). `radio` controla que tan lejos del
     nominal se explora (mayor radio = mas robusto y mas conservador)."""
-    nominal = ConfigIncertidumbre("nominal", 0.25, 1.0, 1.00, 1.0)
+    nominal = ConfigIncertidumbre("nominal", 0.25, 1.0, 1.00, 1.0, sigma_sistemico=0.10)
     if radio == "bajo":
-        peores = [ConfigIncertidumbre("congestion_alta", 0.30, 1.2, 1.06, 1.10)]
+        peores = [ConfigIncertidumbre("congestion_alta", 0.30, 1.2, 1.06, 1.10, sigma_sistemico=0.13)]
     elif radio == "alto":
-        peores = [ConfigIncertidumbre("congestion_alta", 0.34, 1.4, 1.12, 1.20),
-                  ConfigIncertidumbre("dia_critico", 0.42, 1.8, 1.20, 1.40)]
+        peores = [ConfigIncertidumbre("congestion_alta", 0.34, 1.4, 1.12, 1.20, sigma_sistemico=0.16),
+                  ConfigIncertidumbre("dia_critico", 0.42, 1.8, 1.20, 1.40, sigma_sistemico=0.24)]
     else:  # medio
-        peores = [ConfigIncertidumbre("congestion_alta", 0.32, 1.3, 1.10, 1.15),
-                  ConfigIncertidumbre("dia_critico", 0.38, 1.6, 1.15, 1.30)]
+        peores = [ConfigIncertidumbre("congestion_alta", 0.32, 1.3, 1.10, 1.15, sigma_sistemico=0.15),
+                  ConfigIncertidumbre("dia_critico", 0.38, 1.6, 1.15, 1.30, sigma_sistemico=0.22)]
     return [nominal] + peores
+
+
+def perfil_td_franjas(trafico: Sequence, jornada_inicio: str = "09:00",
+                      hora_ref: str = "09:00") -> List[Tuple[float, float, float]]:
+    """Perfil de trafico DEPENDIENTE DE LA HORA para la simulacion (TD-VRP).
+
+    La matriz contextual ya lleva HORNEADO el factor de `hora_ref`. Este perfil devuelve, por
+    franja, el multiplicador RELATIVO `f_traf(franja) / f_traf(hora_ref)` (en minutos desde el
+    inicio de jornada), para que un tramo recorrido a las 18:00 sea mas lento que a las 11:00
+    sin duplicar el factor ya horneado. Formato: [(ini_min, fin_min, mult), ...].
+    """
+    from utils.formatters import hhmm_to_minutes
+    t0 = hhmm_to_minutes(jornada_inicio)
+    glob = [f for f in (trafico or [])
+            if (not getattr(f, "macrozona", "")
+                or str(f.macrozona).lower() in ("", "todas", "todos"))]
+    glob = glob or list(trafico or [])
+    tr = hhmm_to_minutes(hora_ref)
+    f_ref = 1.0
+    for f in glob:
+        if hhmm_to_minutes(f.hora_inicio) <= tr <= hhmm_to_minutes(f.hora_fin):
+            f_ref = float(f.factor_trafico)
+            break
+    franjas = []
+    for f in glob:
+        ini = float(hhmm_to_minutes(f.hora_inicio) - t0)
+        fin = float(hhmm_to_minutes(f.hora_fin) - t0)
+        mult = round(float(f.factor_trafico) / f_ref, 4) if f_ref else 1.0
+        franjas.append((ini, fin, mult))
+    return sorted(franjas)
 
 
 def _idx_macrozona(zonas) -> dict:
