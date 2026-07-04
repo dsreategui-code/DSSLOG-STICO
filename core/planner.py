@@ -139,7 +139,8 @@ def planificar(contexto: dict, *, fecha: Optional[str] = None, osrm=None,
 
     modelo = preparar_modelo(hub, pedidos, vehiculos, ctx_mat["matriz"], base["dist_km"],
                              tiempos_servicio=contexto.get("tiempos_servicio"),
-                             jornada_inicio=hub.hora_apertura, jornada_fin=hub.hora_cierre)
+                             jornada_inicio=hub.hora_apertura, jornada_fin=hub.hora_cierre,
+                             frac_cuadrillas=float(getattr(params, "frac_cuadrillas", 0.5)))
 
     # Ventanas probabilisticas: buffer de nivel de servicio por nodo (chance-constrained).
     from core.uncertainty import buffer_sla_por_nodo

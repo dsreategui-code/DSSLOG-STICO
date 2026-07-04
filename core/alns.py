@@ -108,10 +108,16 @@ def destruir_peor(routes, q, modelo, rng):
 # Operadores de reparacion
 # --------------------------------------------------------------------------- #
 def _mejor_insercion(routes, c, modelo):
-    """(costo, r, pos) de la mejor insercion factible de c (o None)."""
+    """(costo, r, pos) de la mejor insercion factible de c (o None). Respeta capacidad y
+    cuadrilla: un pedido de instalacion solo entra en la ruta de un vehiculo con cuadrilla."""
     t = modelo.tiempo_min
+    req = modelo.requiere_cuadrilla or []
+    vc = modelo.vehiculo_cuadrilla or []
+    necesita_crew = bool(vc and c < len(req) and req[c] and not all(vc))
     mejor = None
     for r, ruta in enumerate(routes):
+        if necesita_crew and not (r < len(vc) and vc[r]):
+            continue
         if (_carga(modelo, ruta, "m3") + modelo.demanda_m3[c] > _cap(modelo, r, "m3") + 1e-6 or
                 _carga(modelo, ruta, "kg") + modelo.demanda_kg[c] > _cap(modelo, r, "kg") + 1e-6):
             continue

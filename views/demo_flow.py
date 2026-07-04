@@ -131,8 +131,11 @@ def _paso_params():
     par = ctx["parametros"]
     n_total = len(ctx["pedidos"])
     st.caption("Parametros operativos de la jornada. El motor aplica ALNS y evaluacion robusta "
-               "(DRO) de forma intrinseca, y ya incorpora los **tiempos de servicio** por tipo "
-               "de pedido (estandar 8, subida 18, instalacion 25 min) desde el dataset.")
+               "(DRO) de forma intrinseca; incorpora los **tiempos de servicio** por tipo de "
+               "pedido; y respeta **restricciones operativas reales**: jornada maxima del "
+               f"conductor ({int(par.jornada_max_min)//60} h), **descanso/almuerzo** de "
+               f"{int(par.descanso_min)} min al mediodia, y **cuadrillas** (los pedidos de "
+               "instalacion/atencion especial solo los atienden vehiculos con cuadrilla).")
     c1, c2, c3 = st.columns(3)
     n_plan = c1.slider("Tamano de la jornada (nº pedidos)", 4, n_total, min(60, n_total),
                        key="df_nplan", help="Cuantos pedidos entran a la jornada. Mas pedidos = "

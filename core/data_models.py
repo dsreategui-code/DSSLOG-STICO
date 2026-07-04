@@ -293,7 +293,12 @@ class Parametros:
     semilla_base: int = 42
     tiempo_solver_seg: int = 10
     espera_max_min: int = 0
-    jornada_max_min: int = 600
+    jornada_max_min: int = 540                # jornada MAXIMA del conductor (min); 9 h laboral
+    # --- Restricciones operativas ---
+    frac_cuadrillas: float = 0.5              # fraccion de la flota con cuadrilla de instalacion
+    descanso_min: int = 45                    # duracion del almuerzo/descanso (0 = desactivado)
+    descanso_desde_min: int = 180             # ventana del descanso: inicio (min desde jornada, 12:00)
+    descanso_hasta_min: int = 270             # ventana del descanso: fin (13:30)
     penalizacion_tardanza: float = 1.0
     penalizacion_riesgo: float = 1.0
     umbral_retraso_replanificar: float = 20.0

@@ -17,16 +17,42 @@ from core.optimizer_ortools import ModeloNumerico, resolver_cvrptw
 from utils.formatters import hhmm_to_minutes
 
 
+# Tipos de pedido que requieren una CUADRILLA especializada (instalacion / 2+ personas).
+TIPOS_CUADRILLA = {"Instalacion", "Atencion especial"}
+
+
 def _servicio_de(pedido: Pedido, tiempos: Dict[str, TiempoServicio], defecto: float) -> float:
     ts = tiempos.get(pedido.tipo_pedido) or tiempos.get(pedido.tipo_producto)
     return float(ts.moda) if ts else float(defecto)
+
+
+def _requiere_cuadrilla(p: Pedido) -> bool:
+    return bool(getattr(p, "requiere_instalacion", False) or p.tipo_pedido in TIPOS_CUADRILLA)
+
+
+def _cumple_operativo(resultado: dict, modelo: ModeloNumerico, jornada_max: int) -> bool:
+    """True si el resultado respeta las restricciones operativas duras (jornada del conductor y
+    cuadrillas). Se usa para descartar candidatas ALNS no conformes antes del recomendador."""
+    req = modelo.requiere_cuadrilla or []
+    vc = modelo.vehiculo_cuadrilla or []
+    hay_restr_crew = bool(vc) and not all(vc)
+    crew_ids = {modelo.vehiculo_ids[i] for i in range(len(vc))
+                if vc[i] and i < len(modelo.vehiculo_ids)}
+    for veh, rc in resultado.get("rutas", {}).items():
+        if jornada_max and (rc.tiempo_min - rc.inicio_min) > jornada_max + 1:
+            return False
+        if hay_restr_crew and veh not in crew_ids:
+            if any(s.idx_nodo < len(req) and req[s.idx_nodo] for s in rc.secuencia):
+                return False
+    return True
 
 
 def preparar_modelo(hub: Hub, pedidos: Sequence[Pedido], vehiculos: Sequence[Vehiculo],
                     tiempo_min: np.ndarray, dist_km: np.ndarray,
                     tiempos_servicio: Optional[Sequence[TiempoServicio]] = None,
                     jornada_inicio: str = "09:00", jornada_fin: str = "19:00",
-                    servicio_defecto: float = 5.0) -> ModeloNumerico:
+                    servicio_defecto: float = 5.0,
+                    frac_cuadrillas: float = 0.5) -> ModeloNumerico:
     """Construye la instancia numerica (nodo 0 = HUB) lista para el resolvedor."""
     t0 = hhmm_to_minutes(jornada_inicio)
     H = hhmm_to_minutes(jornada_fin) - t0
@@ -46,16 +72,24 @@ def preparar_modelo(hub: Hub, pedidos: Sequence[Pedido], vehiculos: Sequence[Veh
         dem_kg.append(p.peso_kg)
         pedido_ids.append(p.pedido_id)
 
+    # Restricciones operativas: pedidos que requieren cuadrilla y vehiculos que la tienen.
+    nv = len(vehiculos)
+    req_cuadrilla = [False] + [_requiere_cuadrilla(p) for p in pedidos]
+    n_cuad = max(1, min(nv, round(float(frac_cuadrillas) * nv))) if nv else 0
+    veh_cuadrilla = [i < n_cuad for i in range(nv)]
+
     return ModeloNumerico(
         tiempo_min=np.asarray(tiempo_min, dtype=float),
         dist_km=np.asarray(dist_km, dtype=float),
         demanda_m3=dem_m3, demanda_kg=dem_kg, ventanas_min=ventanas,
         servicio_min=servicio, pedido_ids=pedido_ids,
-        num_vehiculos=len(vehiculos),
+        num_vehiculos=nv,
         cap_m3=[v.capacidad_m3 for v in vehiculos],
         cap_kg=[v.capacidad_kg for v in vehiculos],
         vehiculo_ids=[v.vehiculo_id for v in vehiculos],
         horizonte_min=H,
+        requiere_cuadrilla=req_cuadrilla,
+        vehiculo_cuadrilla=veh_cuadrilla,
     )
 
 
@@ -104,8 +138,10 @@ def generar_candidatas(modelo: ModeloNumerico, perfiles: Sequence[PerfilDecision
         perfil_alns = PerfilDecision("robusta", w_tiempo=0.6, w_tardanza=1.0, w_riesgo=1.0)
         out = optimizar(modelo, params, perfil=perfil_alns, buffer_sla=buffer_sla,
                         warm=mejor_ot, n_elites=2)
+        jornada_max = int(getattr(params, "jornada_max_min", 0) or 0)
         for i, res_e in enumerate([out["best"]] + out["elites"]):
-            if res_e and res_e.get("status") == "ok" and res_e.get("rutas"):
+            if (res_e and res_e.get("status") == "ok" and res_e.get("rutas")
+                    and _cumple_operativo(res_e, modelo, jornada_max)):
                 res_e["perfil"] = f"alns-{i}"          # etiqueta unica por candidata ALNS
                 candidatas.append({"perfil": f"alns-{i}", "resultado": res_e,
                                    "kpis": kpis_candidata(res_e, modelo)})

@@ -48,8 +48,9 @@ class RutaCandidata:
     vehiculo_id: str
     secuencia: List[ParadaRuta] = field(default_factory=list)
     distancia_km: float = 0.0
-    tiempo_min: float = 0.0
+    tiempo_min: float = 0.0            # cumul de tiempo al FIN de la ruta (min desde jornada)
     tardanza_total_min: float = 0.0
+    inicio_min: float = 0.0           # cumul al INICIO (salida del hub); span = tiempo_min - inicio_min
 
     @property
     def n_paradas(self) -> int:
@@ -71,6 +72,9 @@ class ModeloNumerico:
     cap_kg: List[float]
     vehiculo_ids: List[str]
     horizonte_min: int
+    # Restricciones operativas (opcionales; vacio = sin restriccion):
+    requiere_cuadrilla: List[bool] = field(default_factory=list)   # por nodo (0=HUB=False)
+    vehiculo_cuadrilla: List[bool] = field(default_factory=list)   # por vehiculo
 
 
 def resolver_cvrptw(modelo: ModeloNumerico, perfil: PerfilDecision,
@@ -150,6 +154,34 @@ def resolver_cvrptw(modelo: ModeloNumerico, perfil: PerfilDecision,
     if any(modelo.cap_kg):
         _dim_capacidad(modelo.demanda_kg, modelo.cap_kg, "Peso", 1)
 
+    # --- Restricciones operativas ---
+    # (1) Jornada MAXIMA del conductor: el span de la ruta (fin - inicio) <= jornada_max.
+    jornada_max = int(getattr(params, "jornada_max_min", H) or H)
+    if 0 < jornada_max < H:
+        for v in range(nv):
+            tdim.SetSpanUpperBoundForVehicle(jornada_max, v)
+
+    # (2) Cuadrillas: los pedidos de instalacion solo los pueden atender vehiculos con cuadrilla.
+    veh_cuad = list(modelo.vehiculo_cuadrilla or [])
+    req_cuad = list(modelo.requiere_cuadrilla or [])
+    if veh_cuad and req_cuad and not all(veh_cuad):     # solo si hay una restriccion real
+        crew = [v for v in range(nv) if v < len(veh_cuad) and veh_cuad[v]]
+        if crew:
+            for node in range(1, n):
+                if node < len(req_cuad) and req_cuad[node]:
+                    routing.SetAllowedVehiclesForIndex(crew, mgr.NodeToIndex(node))
+
+    # (3) Descanso/almuerzo: cada vehiculo toma un break (min) dentro de la ventana de mediodia.
+    descanso = int(getattr(params, "descanso_min", 0) or 0)
+    if descanso > 0:
+        solver = routing.solver()
+        visita = [serv[mgr.IndexToNode(i)] for i in range(routing.Size())]
+        b_ini = int(getattr(params, "descanso_desde_min", 180))
+        b_fin = int(getattr(params, "descanso_hasta_min", 270))
+        for v in range(nv):
+            brk = solver.FixedDurationIntervalVar(b_ini, b_fin, descanso, False, f"desc_{v}")
+            tdim.SetBreakIntervalsOfVehicle([brk], v, visita)
+
     # Permitir descartar pedidos infactibles con penalizacion muy alta.
     penalty = 10_000_000
     for node in range(1, n):
@@ -193,6 +225,7 @@ def resolver_cvrptw(modelo: ModeloNumerico, perfil: PerfilDecision,
         if rc.secuencia:
             rc.distancia_km = round(dist_km, 3)
             rc.tiempo_min = float(sol.Value(tdim.CumulVar(routing.End(v))))
+            rc.inicio_min = float(sol.Value(tdim.CumulVar(routing.Start(v))))
             rc.tardanza_total_min = round(sum(s.tardanza_min for s in rc.secuencia), 2)
             rutas[veh_id] = rc
 
