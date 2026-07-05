@@ -1,6 +1,22 @@
 incidencia_id,tipo_incidencia,distrito,macrozona,franja,probabilidad,duracion_min,impacto_tiempo,severidad,activa_demo
-INC01,accidente_via,,Este,tarde,0.08,40,1.40,alta,0
-INC02,bloqueo_manifestacion,Cercado de Lima,Centro,mediodia,0.05,60,1.60,alta,0
-INC03,congestion_severa,,CentroSur,tarde,0.12,25,1.30,media,0
-INC04,via_cerrada_obra,La Molina,Este,manana,0.06,30,1.35,media,0
-INC05,vehiculo_averiado,,Norte,mediodia,0.04,45,1.25,media,0
+INC_OE1,congestion_severa,,Oeste,tarde,0.10,25,1.30,media,0
+INC_OE2,accidente_via,,Oeste,manana,0.05,40,1.40,alta,0
+INC_OE3,vehiculo_averiado,,Oeste,mediodia,0.04,45,1.25,media,0
+INC_CE1,bloqueo_manifestacion,Cercado de Lima,Centro,mediodia,0.06,60,1.60,alta,0
+INC_CE2,congestion_severa,,Centro,tarde,0.13,25,1.35,media,0
+INC_CE3,ambulante_via,La Victoria,Centro,manana,0.07,20,1.25,media,0
+INC_CS1,congestion_severa,,CentroSur,tarde,0.12,25,1.30,media,0
+INC_CS2,via_cerrada_obra,,CentroSur,manana,0.05,30,1.35,media,0
+INC_CS3,accidente_via,,CentroSur,mediodia,0.04,35,1.35,alta,0
+INC_ES1,accidente_via,,Este,tarde,0.08,40,1.40,alta,0
+INC_ES2,via_cerrada_obra,La Molina,Este,manana,0.06,30,1.35,media,0
+INC_ES3,congestion_severa,Ate,Este,tarde,0.12,30,1.35,media,0
+INC_ES4,ambulante_via,Santa Anita,Este,manana,0.08,20,1.25,media,0
+INC_ES5,congestion_severa,,Este,mediodia,0.06,25,1.30,media,0
+INC_NO1,vehiculo_averiado,,Norte,mediodia,0.05,45,1.25,media,0
+INC_NO4,via_cerrada_obra,,Norte,manana,0.05,30,1.30,media,0
+INC_NO2,congestion_severa,,Norte,tarde,0.11,25,1.30,media,0
+INC_NO3,inseguridad_zona,,Norte,tarde,0.04,20,1.20,media,0
+INC_SU1,congestion_severa,,Sur,tarde,0.10,25,1.30,media,0
+INC_SU2,via_cerrada_obra,,Sur,manana,0.05,30,1.30,media,0
+INC_SU3,accidente_via,,Sur,mediodia,0.04,35,1.35,alta,0

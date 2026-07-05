@@ -47,6 +47,19 @@ def _escenario():
     return st.session_state.dt_escenario
 
 
+def _catalogo_incidencias():
+    """Catalogo real (incidencias + zonas) para el modelo UNIFICADO de incidencias del gemelo.
+    Se cachea en sesion; si no carga, el gemelo usa incidencias genericas por intensidad."""
+    if "dt_catalogo" not in st.session_state:
+        try:
+            from services.cortex_loader import cargar_contexto
+            ctx = cargar_contexto()
+            st.session_state.dt_catalogo = (ctx["incidencias"], ctx["zonas"])
+        except Exception:  # noqa: BLE001
+            st.session_state.dt_catalogo = (None, None)
+    return st.session_state.dt_catalogo
+
+
 def _orden_str(ids, k=6):
     s = " → ".join(ids[:k])
     return s + (f" … (+{len(ids) - k})" if len(ids) > k else "")
@@ -72,8 +85,16 @@ def _tarjeta_propuesta(p, dec):
                  "rechazada": "Ruta original mantenida"}.get(estado, "Pendiente de decision")
         top[1].markdown(f"<div style='text-align:right;color:#475467;font-size:13px;'>"
                         f"{badge}</div>", unsafe_allow_html=True)
-        st.caption(f"Incidencia {p['incidencia_hora']} en {p['incidencia_distrito']} "
-                   f"(+{p['incidencia_min']:.0f} min), que arrastra las paradas siguientes.")
+        motivo = p.get("motivo", "incidencia")
+        if motivo == "incidencia":
+            st.caption(f"Incidencia {p['incidencia_hora']} en {p['incidencia_distrito']} "
+                       f"(+{p['incidencia_min']:.0f} min), que arrastra las paradas siguientes.")
+        elif motivo == "riesgo de jornada":
+            st.caption("Riesgo de jornada: el vehiculo excederia su jornada maxima; reordenar por "
+                       "cercania acorta la ruta.")
+        else:
+            st.caption("Riesgo de ventana: una parada pendiente llegaria fuera de su horario si se "
+                       "mantiene el orden actual.")
         ca, cb = st.columns(2)
         with ca:
             st.markdown("**Ruta actual**")
@@ -89,11 +110,17 @@ def _tarjeta_propuesta(p, dec):
                       delta=(f"-{p['reduccion_min']:.0f} min" if p["reduccion_min"] > 0
                              else None), delta_color="inverse")
             st.caption("orden: " + _orden_str(p["orden_propuesto"]))
-        recup = (f"recupera **{p['recuperadas']}** entrega(s) y " if p["recuperadas"] > 0
-                 else "")
-        st.info(f"Sustento: reordenar priorizando la ventana mas proxima {recup}reduce la "
-                f"tardanza acumulada en **{p['reduccion_min']:.0f} min**, manteniendo los "
-                f"mismos pedidos (sin transferencias entre vehiculos).")
+        partes = []
+        if p["recuperadas"] > 0:
+            partes.append(f"recupera **{p['recuperadas']}** entrega(s)")
+        if p["reduccion_min"] > 0:
+            partes.append(f"reduce la tardanza acumulada en **{p['reduccion_min']:.0f} min**")
+        dj = float(p.get("jornada_actual_min", 0.0)) - float(p.get("jornada_propuesta_min", 0.0))
+        if dj > 0.5:
+            partes.append(f"baja el exceso de jornada en **{dj:.0f} min**")
+        detalle = ", ".join(partes) if partes else "mejora la operacion del vehiculo"
+        st.info(f"Sustento: reordenar las paradas {detalle}, manteniendo los mismos pedidos "
+                f"(sin transferencias entre vehiculos).")
         b1, b2 = st.columns(2)
         b1.button("Aprobar re-ruteo", key=f"dt_ap_{veh}", type="primary",
                   use_container_width=True, disabled=(estado == "aprobada"),
@@ -151,9 +178,11 @@ def render():
         help="El mapa fluido se anima en el navegador sin recargar la pagina. Si no se "
              "visualiza bien, activa el mapa clasico.")
 
-    # Inyeccion de incidencias aleatorias (reproducible con la semilla)
+    # Inyeccion de incidencias aleatorias (reproducible con la semilla), con el catalogo real.
+    cat_inc, cat_zonas = _catalogo_incidencias()
     esc_sin, incidencias = simular_incidencias(esc_base, tasa=intensidad / 100.0,
-                                               seed=int(semilla))
+                                               seed=int(semilla), incidencias=cat_inc,
+                                               zonas=cat_zonas)
     # Propuestas de re-ruteo (NO se aplican solas: las decide el usuario)
     propuestas = proponer_reruteo(esc_sin)
     sig = f"{int(semilla)}:{int(intensidad)}"

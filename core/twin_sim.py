@@ -23,131 +23,204 @@ import pandas as pd
 
 from config.cortex_settings import FACTOR_CIRCUITO
 from core.risk_engine import UMBRAL_RIESGO, clasificar_iri
+from core.uncertainty import (TIPOS_INCIDENCIA, descripcion_incidencia, franja_de_minuto,
+                             incidencias_de_nodo, prob_ausencia)
 
 MARGEN_ALERTA_MIN = 20.0   # antelacion con que salta una alerta sin incidencia previa
 MARGEN_RIESGO_MIN = 25.0   # una parada a <25 min de su ventana ya se considera EN RIESGO
+JORNADA_MAX_DEF = 540.0    # jornada maxima por defecto del conductor (min) para el riesgo de jornada
 
-# Catalogo de tipos de incidencia (categorias reales del dominio de ultima milla en Lima).
-# 'afecta_otif': la entrega falla en primer intento (ausencia) -> cuenta contra OTIF, no OTD.
-# Los retrasos (dmin..dmax) son SIMULADOS; los tipos y pesos reflejan el contexto urbano.
-CATALOGO_INCIDENCIAS = [
-    {"tipo": "congestion_trafico", "desc": "Congestion de transito",
-     "sev": "media", "dmin": 8.0, "dmax": 22.0, "afecta_otif": False, "peso": 0.34},
-    {"tipo": "estacionamiento", "desc": "Dificultad de estacionamiento/acceso",
-     "sev": "baja", "dmin": 5.0, "dmax": 14.0, "afecta_otif": False, "peso": 0.24},
-    {"tipo": "ausencia_cliente", "desc": "Cliente ausente (primer intento fallido)",
-     "sev": "media", "dmin": 6.0, "dmax": 15.0, "afecta_otif": True, "peso": 0.18},
-    {"tipo": "accidente_via", "desc": "Accidente en via",
-     "sev": "alta", "dmin": 20.0, "dmax": 45.0, "afecta_otif": False, "peso": 0.14},
-    {"tipo": "bloqueo_manifestacion", "desc": "Bloqueo por manifestacion",
-     "sev": "alta", "dmin": 25.0, "dmax": 60.0, "afecta_otif": False, "peso": 0.10},
-]
-SEV_ORDEN = {"baja": 0, "media": 1, "alta": 2}
+TASA_REF = 0.12            # tasa "Normal": la intensidad configurada escala respecto a esta.
+# Incidencia generica para nodos SIN match en el catalogo (o sin catalogo cargado): mantiene
+# util el control de intensidad aunque falte contexto de zona/franja del nodo.
+GEN_TIPO, GEN_DUR, GEN_SEV = "congestion_severa", 18.0, "media"
 
 
 def simular_incidencias(escenario: dict, *, tasa: float = 0.12, seed: int = 7,
-                        mult_retraso: float = 1.0,
-                        catalogo: Optional[list] = None) -> Tuple[dict, List[dict]]:
+                        mult_retraso: float = 1.0, incidencias: Optional[list] = None,
+                        zonas: Optional[list] = None) -> Tuple[dict, List[dict]]:
     """Devuelve (escenario_con_incidencias, lista_incidencias).
 
-    Para cada parada, con probabilidad ``tasa`` ocurre una incidencia de un ``tipo`` sorteado
-    del catalogo (por peso); agrega un retraso (escalado por ``mult_retraso``, p. ej. un dia
-    critico) que se PROPAGA a las paradas posteriores del mismo vehiculo (cascada). Si el tipo
-    es ausencia, la entrega falla en primer intento (afecta OTIF). Reproducible con ``seed``.
+    Modelo de incidencias UNIFICADO con el simulador de planificacion (core.uncertainty): cada
+    parada cruza el catalogo REAL de incidencias (incidencias.csv) por su distrito/macrozona y
+    la franja horaria de su ETA, mediante el matcher compartido `incidencias_de_nodo`. Con esa
+    probabilidad (escalada por la intensidad ``tasa`` relativa a la tasa normal, y la duracion
+    por ``mult_retraso`` de un dia critico) la parada puede sufrir:
+      - una incidencia de VIA/TRAFICO tipificada del catalogo: retraso que se PROPAGA en
+        cascada a las paradas siguientes del mismo vehiculo; y/o
+      - la AUSENCIA del cliente (primer intento fallido -> afecta OTIF), con probabilidad segun
+        el tipo de zona (residencial vs. comercial), como en el simulador de planificacion.
+    Si un nodo no tiene incidencia catalogada (o no se pasa catalogo) usa una incidencia
+    generica de congestion con probabilidad = ``tasa``. Reproducible con ``seed``.
     """
-    cat = catalogo or CATALOGO_INCIDENCIAS
-    tipos = [c["tipo"] for c in cat]
-    pesos = [c["peso"] for c in cat]
-    por_tipo = {c["tipo"]: c for c in cat}
+    fint = float(tasa) / TASA_REF if TASA_REF else 0.0
+    mz = {z.distrito: z.macrozona for z in (zonas or [])}
     rng = random.Random(int(seed))
     esc = copy.deepcopy(escenario)
-    incidencias: List[dict] = []
+    incidencias_ocurridas: List[dict] = []
     for veh, paradas in esc["rutas"].items():
         shift = 0.0
         for p in paradas:
             base_eta = float(p["eta_min"]) + shift
             p["eta_min"] = round(base_eta, 1)
-            if rng.random() < float(tasa):
-                c = por_tipo[rng.choices(tipos, weights=pesos, k=1)[0]]
-                extra = round(rng.uniform(c["dmin"], c["dmax"]) * float(mult_retraso), 1)
-                p["incidencia"] = True
-                p["incidencia_min"] = extra
-                p["incidencia_tipo"] = c["tipo"]
-                p["incidencia_desc"] = c["desc"]
-                p["incidencia_sev"] = c["sev"]
-                p["t_incidencia"] = round(base_eta, 1)
-                p["primer_intento_ok"] = not c["afecta_otif"]
-                incidencias.append({
+            franja = franja_de_minuto(base_eta)
+            distrito = p.get("distrito", "") or ""
+            macro = mz.get(distrito, "")
+
+            extra = 0.0
+            tipo = desc = sev = t_inc = None
+            primer_ok = True
+
+            # (1) Incidencia de via/trafico (catalogo real; generica de congestion si no hay match).
+            cands = incidencias_de_nodo(distrito, macro, incidencias, franja=franja)
+            if cands:
+                inc = max(cands, key=lambda i: i.probabilidad)   # la mas probable del nodo/franja
+                p_via = min(1.0, float(inc.probabilidad) * fint)
+                tipo_via, dur_via, sev_via = inc.tipo_incidencia, float(inc.duracion_min), inc.severidad
+            else:
+                p_via = min(1.0, TASA_REF * fint)                # == tasa: control global de intensidad
+                tipo_via, dur_via, sev_via = GEN_TIPO, GEN_DUR, GEN_SEV
+            if rng.random() < p_via:
+                d = round(dur_via * rng.uniform(0.75, 1.25) * float(mult_retraso), 1)
+                extra += d
+                tipo, desc, sev, t_inc = tipo_via, descripcion_incidencia(tipo_via), sev_via, base_eta
+                incidencias_ocurridas.append({
                     "pedido_id": p["pedido_id"], "vehiculo_id": veh,
                     "hora": _hhmm(base_eta), "t_min": round(base_eta, 1),
-                    "tipo": c["tipo"], "descripcion": c["desc"], "severidad": c["sev"],
-                    "franja": _franja(base_eta), "retraso_min": extra,
-                    "distrito": p.get("distrito", "-"), "afecta_otif": c["afecta_otif"]})
-                shift += extra
-            else:
-                p["incidencia"] = False
-                p["incidencia_min"] = 0.0
-                p["incidencia_tipo"] = None
-                p["incidencia_desc"] = None
-                p["incidencia_sev"] = None
-                p["t_incidencia"] = None
-                p["primer_intento_ok"] = True
+                    "tipo": tipo_via, "descripcion": descripcion_incidencia(tipo_via),
+                    "severidad": sev_via, "franja": franja, "retraso_min": d,
+                    "distrito": distrito or "-", "afecta_otif": False})
+
+            # (2) Ausencia del cliente (independiente; primer intento fallido -> afecta OTIF).
+            p_aus = min(1.0, prob_ausencia(p.get("detalle_cliente", "")) * fint)
+            if rng.random() < p_aus:
+                primer_ok = False
+                da = round(rng.uniform(4.0, 8.0), 1)             # espera/intento antes de continuar
+                extra += da
+                if tipo is None:                                 # si no hubo incidencia de via, la causa es la ausencia
+                    tipo, desc, sev, t_inc = ("ausencia_cliente",
+                                              descripcion_incidencia("ausencia_cliente"),
+                                              "media", base_eta)
+                incidencias_ocurridas.append({
+                    "pedido_id": p["pedido_id"], "vehiculo_id": veh,
+                    "hora": _hhmm(base_eta), "t_min": round(base_eta, 1),
+                    "tipo": "ausencia_cliente", "descripcion": descripcion_incidencia("ausencia_cliente"),
+                    "severidad": "media", "franja": franja, "retraso_min": da,
+                    "distrito": distrito or "-", "afecta_otif": True})
+
+            p["incidencia"] = bool(extra > 0.0 or not primer_ok)
+            p["incidencia_min"] = round(extra, 1)
+            p["incidencia_tipo"] = tipo
+            p["incidencia_desc"] = desc
+            p["incidencia_sev"] = sev
+            p["t_incidencia"] = round(t_inc, 1) if t_inc is not None else None
+            p["primer_intento_ok"] = primer_ok
+            shift += extra
             p["tardanza_min"] = round(max(0.0, p["eta_min"] - float(p["ventana_fin_min"])), 1)
     _marcar_alertas(esc)
-    return esc, incidencias
+    return esc, incidencias_ocurridas
 
 
-def proponer_reruteo(escenario: dict) -> List[dict]:
-    """Propuestas de re-secuenciacion (sin aplicar) para cada vehiculo con incidencia: compara
-    la ruta actual de sus pendientes contra el orden por ventana mas proxima (EDD) y, SOLO si
-    mejora incumplimientos/tardanza, devuelve la propuesta con su sustento y la causa."""
+def proponer_reruteo(escenario: dict, *, incluir_riesgo: bool = True,
+                     jornada_max: Optional[float] = None,
+                     margen_riesgo: float = MARGEN_RIESGO_MIN) -> List[dict]:
+    """Propuestas de re-secuenciacion (sin aplicar) POR VEHICULO. Dispara cuando:
+      - hay una INCIDENCIA (retraso ya ocurrido): reordena las paradas posteriores; o
+      - hay RIESGO proyectado de romper una restriccion (``incluir_riesgo``): una parada
+        pendiente llegaria fuera de ventana, o el vehiculo excederia la jornada maxima.
+
+    Compara la ruta actual contra EDD (ventana mas proxima), Moore-Hodgson (minimiza nº de
+    tardias) y —en el caso de riesgo— vecino-mas-cercano (acorta la ruta, ayuda a la jornada).
+    Propone SOLO si mejora sin empeorar el cumplimiento de ventanas. `motivo` explica el gatillo.
+    """
+    jmax = float(jornada_max) if jornada_max is not None else JORNADA_MAX_DEF
     propuestas: List[dict] = []
     for veh, paradas in escenario["rutas"].items():
         idx = next((i for i, p in enumerate(paradas) if p.get("incidencia")), None)
-        if idx is None:
-            continue
-        fijas, pend = paradas[:idx + 1], paradas[idx + 1:]
+        es_inc = idx is not None
+        if es_inc:                                   # anclaje en la incidencia (lo ya ocurrido)
+            fijas, pend = paradas[:idx + 1], paradas[idx + 1:]
+            ancla = fijas[-1]
+            t0 = float(ancla["eta_min"]) + float(ancla.get("servicio_min", 8.0)) \
+                + float(ancla.get("incidencia_min", 0.0))
+            pos0 = ancla["coord"]
+            ancla_idx = idx
+        else:                                        # sin incidencia: se re-planifica desde el hub
+            if not incluir_riesgo:
+                continue
+            fijas, pend = [], list(paradas)
+            t0 = float(escenario.get("t_inicio_min", 540))
+            pos0 = (escenario["hub"]["lat"], escenario["hub"]["lon"])
+            ancla_idx = -1
         if len(pend) < 2:
             continue
-        ancla = fijas[-1]
-        t0 = float(ancla["eta_min"]) + float(ancla.get("servicio_min", 8.0)) \
-            + float(ancla.get("incidencia_min", 0.0))
-        pos0 = ancla["coord"]
+
+        # RIESGO sobre los ETAs ALMACENADOS (lo que ve el operador): ventana y/o jornada.
+        riesgo_v = any(float(p["eta_min"]) > float(p.get("ventana_fin_min", 1e9)) - margen_riesgo
+                       for p in pend)
+        riesgo_j = _exceso_jornada(paradas, escenario, jmax) > 0.0
+        if not es_inc and not (riesgo_v or riesgo_j):
+            continue
 
         base = copy.deepcopy(pend)
         _recomputar(base, t0, pos0)
-        k_base = (_n_tarde(base), _tardanza_total(base))
+        base_win = (_n_tarde(base), round(_tardanza_total(base), 1))
+        base_exc = round(_exceso_jornada(base, escenario, jmax), 1)
+        # Tope de seguridad (caso riesgo): el resultado aplicado no debe empeorar lo ALMACENADO.
+        stored_win = (sum(1 for p in pend if float(p.get("tardanza_min", 0.0)) > 0.0),
+                      round(sum(float(p.get("tardanza_min", 0.0)) for p in pend), 1))
 
-        # Dos candidatos: EDD (ventana mas proxima) y Moore-Hodgson (minimiza nº de tardias
-        # difiriendo la parada mas costosa). Se elige el mejor y se propone solo si mejora.
-        opciones = []
-        for orden in (sorted(copy.deepcopy(pend), key=lambda x: float(x["ventana_fin_min"])),
-                      _moore_orden(copy.deepcopy(pend), t0, pos0)):
+        candidatos = [sorted(copy.deepcopy(pend), key=lambda x: float(x["ventana_fin_min"])),
+                      _moore_orden(copy.deepcopy(pend), t0, pos0)]
+        if not es_inc:
+            candidatos.append(_nn_orden(copy.deepcopy(pend), pos0))   # acorta ruta -> jornada
+        mejor = None
+        for orden in candidatos:
             _recomputar(orden, t0, pos0)
-            opciones.append(((_n_tarde(orden), _tardanza_total(orden)), orden))
-        k_cand, cand = min(opciones, key=lambda o: o[0])
-
-        if k_cand >= k_base:          # solo se propone si reduce nº de tardias / tardanza
+            win = (_n_tarde(orden), round(_tardanza_total(orden), 1))
+            if win > base_win:                        # nunca empeorar las ventanas
+                continue
+            if not es_inc and win > stored_win:        # ni empeorar lo que ve el operador
+                continue
+            exc = round(_exceso_jornada(orden, escenario, jmax), 1)
+            clave = (win[0], win[1]) if es_inc else (win[0], win[1], exc)
+            if mejor is None or clave < mejor[0]:
+                mejor = (clave, list(orden), win, exc)
+        if mejor is None:
             continue
-        inc = paradas[idx]
+        _, cand, cand_win, cand_exc = mejor
+        mejora = (cand_win < base_win) if es_inc else ((cand_win, cand_exc) < (base_win, base_exc))
+        if not mejora:
+            continue
+
+        motivo = ("incidencia" if es_inc
+                  else ("riesgo de ventana" if (cand_win < base_win or riesgo_v)
+                        else "riesgo de jornada"))
+        inc = paradas[idx] if es_inc else None
         propuestas.append({
-            "vehiculo_id": veh,
-            "incidencia_hora": _hhmm(inc.get("t_incidencia") or inc["eta_min"]),
-            "incidencia_distrito": inc.get("distrito", "-"),
-            "incidencia_min": float(inc.get("incidencia_min", 0.0)),
-            "incidencia_tipo": inc.get("incidencia_tipo"),
-            "incidencia_desc": inc.get("incidencia_desc") or "Incidencia",
-            "incidencia_sev": inc.get("incidencia_sev") or "media",
-            "incidencia_franja": _franja(inc.get("t_incidencia") or inc["eta_min"]),
-            "pedido_incidencia": inc.get("pedido_id"),
+            "vehiculo_id": veh, "ancla_idx": ancla_idx, "motivo": motivo,
+            "incidencia_hora": _hhmm(inc.get("t_incidencia") or inc["eta_min"]) if inc else None,
+            "incidencia_distrito": inc.get("distrito", "-") if inc else "-",
+            "incidencia_min": float(inc.get("incidencia_min", 0.0)) if inc else 0.0,
+            "incidencia_tipo": inc.get("incidencia_tipo") if inc else None,
+            "incidencia_desc": ((inc.get("incidencia_desc") if inc else None)
+                                or ("Riesgo de ventana" if motivo == "riesgo de ventana"
+                                    else "Riesgo de jornada" if motivo == "riesgo de jornada"
+                                    else "Incidencia")),
+            "incidencia_sev": ((inc.get("incidencia_sev") if inc else None)
+                               or ("media" if es_inc else "alta")),
+            "incidencia_franja": _franja(inc.get("t_incidencia") or inc["eta_min"]) if inc
+                                 else _franja(t0),
+            "pedido_incidencia": inc.get("pedido_id") if inc else None,
             "n_pendientes": len(pend),
             "orden_actual": [p["pedido_id"] for p in base],
             "orden_propuesto": [p["pedido_id"] for p in cand],
-            "tarde_actual": int(k_base[0]), "tarde_propuesto": int(k_cand[0]),
-            "tard_actual_min": round(k_base[1], 1),
-            "tard_propuesto_min": round(k_cand[1], 1),
-            "recuperadas": int(k_base[0] - k_cand[0]),
-            "reduccion_min": round(k_base[1] - k_cand[1], 1),
+            "tarde_actual": int(base_win[0]), "tarde_propuesto": int(cand_win[0]),
+            "tard_actual_min": round(base_win[1], 1),
+            "tard_propuesto_min": round(cand_win[1], 1),
+            "jornada_actual_min": base_exc, "jornada_propuesta_min": cand_exc,
+            "recuperadas": int(base_win[0] - cand_win[0]),
+            "reduccion_min": round(base_win[1] - cand_win[1], 1),
         })
     return propuestas
 
@@ -163,26 +236,35 @@ def aplicar_propuestas(escenario: dict, propuestas: List[dict], aprobadas) -> di
         if prop is None or veh not in esc["rutas"]:
             continue
         paradas = esc["rutas"][veh]
-        idx = next((i for i, p in enumerate(paradas) if p.get("incidencia")), None)
-        if idx is None:
-            continue
-        fijas, pend = paradas[:idx + 1], paradas[idx + 1:]
+        idx = prop.get("ancla_idx")
+        if idx is None:                                   # compat: propuestas sin ancla explicita
+            idx = next((i for i, p in enumerate(paradas) if p.get("incidencia")), None)
+            if idx is None:
+                continue
+        if idx < 0:                                       # anclaje al inicio: re-planifica todo el vehiculo
+            fijas, pend = [], list(paradas)
+            t0 = float(esc.get("t_inicio_min", 540))
+            pos0 = (esc["hub"]["lat"], esc["hub"]["lon"])
+        else:
+            fijas, pend = paradas[:idx + 1], paradas[idx + 1:]
+            ancla = fijas[-1]
+            t0 = float(ancla["eta_min"]) + float(ancla.get("servicio_min", 8.0)) \
+                + float(ancla.get("incidencia_min", 0.0))
+            pos0 = ancla["coord"]
         pid_a_parada = {p["pedido_id"]: p for p in pend}
         nuevo = [pid_a_parada[pid] for pid in prop["orden_propuesto"] if pid in pid_a_parada]
         nuevo += [p for p in pend if p not in nuevo]      # salvaguarda: no perder paradas
-        ancla = fijas[-1]
-        t0 = float(ancla["eta_min"]) + float(ancla.get("servicio_min", 8.0)) \
-            + float(ancla.get("incidencia_min", 0.0))
-        _recomputar(nuevo, t0, ancla["coord"])
+        _recomputar(nuevo, t0, pos0)
         paradas[:] = fijas + nuevo
     _reproyectar_geometrias(esc)
     _marcar_alertas(esc)
     return esc
 
 
-def mitigar_con_reruteo(escenario: dict) -> Tuple[dict, List[dict]]:
+def mitigar_con_reruteo(escenario: dict, *, incluir_riesgo: bool = True,
+                        jornada_max: Optional[float] = None) -> Tuple[dict, List[dict]]:
     """Atajo programatico: propone y aplica TODAS las mejoras (pruebas y modo batch)."""
-    propuestas = proponer_reruteo(escenario)
+    propuestas = proponer_reruteo(escenario, incluir_riesgo=incluir_riesgo, jornada_max=jornada_max)
     esc = aplicar_propuestas(escenario, propuestas, [p["vehiculo_id"] for p in propuestas])
     acciones = [{"vehiculo_id": p["vehiculo_id"], "recuperadas": p["recuperadas"],
                  "tard_antes_min": p["tard_actual_min"],
@@ -349,7 +431,8 @@ def comparar_rutas(esc_inicial: dict, esc_final: dict) -> pd.DataFrame:
 
 def variabilidad_operacion(escenario_base: dict, *, tasa: float = 0.12,
                            mult_retraso: float = 1.0, n_corridas: int = 25,
-                           seed: int = 0) -> dict:
+                           seed: int = 0, incidencias: Optional[list] = None,
+                           zonas: Optional[list] = None) -> dict:
     """Variabilidad de la operacion: corre la jornada con incidencias sobre N semillas y mide
     la DISPERSION del OTD (objetivo del DSS: menor variabilidad = servicio mas consistente).
 
@@ -358,7 +441,8 @@ def variabilidad_operacion(escenario_base: dict, *, tasa: float = 0.12,
     otds = []
     for s in range(int(n_corridas)):
         esc_s, _ = simular_incidencias(escenario_base, tasa=tasa, seed=seed + s,
-                                       mult_retraso=mult_retraso)
+                                       mult_retraso=mult_retraso, incidencias=incidencias,
+                                       zonas=zonas)
         otds.append(resumen_operacion(esc_s)["otd"])
     if not otds:
         return {"otd_medio": 0.0, "otd_std": 0.0, "cv": 0.0, "n": 0, "muestras": []}
@@ -448,13 +532,40 @@ def _tardanza_total(paradas: list) -> float:
     return sum(float(p.get("tardanza_min", 0.0)) for p in paradas)
 
 
+def _fin_ruta_min(paradas: list, escenario: dict) -> float:
+    """Fin de jornada del vehiculo (min): ultima parada + servicio + incidencia + retorno al hub."""
+    if not paradas:
+        return float(escenario.get("t_inicio_min", 540))
+    from core.demo_scenario import VELOCIDAD_KMH, _haversine_km
+    ult = paradas[-1]
+    hub = (escenario["hub"]["lat"], escenario["hub"]["lon"])
+    retorno = _haversine_km(ult["coord"], hub) * FACTOR_CIRCUITO / VELOCIDAD_KMH * 60.0
+    return (float(ult["eta_min"]) + float(ult.get("servicio_min", 8.0))
+            + float(ult.get("incidencia_min", 0.0)) + retorno)
+
+
+def _exceso_jornada(paradas: list, escenario: dict, jornada_max: float) -> float:
+    """Minutos en que el span del vehiculo (fin - inicio de jornada) supera la jornada maxima."""
+    if not jornada_max or jornada_max <= 0 or not paradas:
+        return 0.0
+    span = _fin_ruta_min(paradas, escenario) - float(escenario.get("t_inicio_min", 540))
+    return max(0.0, span - float(jornada_max))
+
+
+def _nn_orden(pend: list, pos0) -> list:
+    """Orden por vecino-mas-cercano desde `pos0`: acorta el viaje total (ayuda a la jornada)."""
+    from core.demo_scenario import _haversine_km
+    rest, orden, cur = list(pend), [], pos0
+    while rest:
+        rest.sort(key=lambda p: _haversine_km(cur, p["coord"]))
+        nxt = rest.pop(0)
+        orden.append(nxt)
+        cur = nxt["coord"]
+    return orden
+
+
 def _franja(minutos: float) -> str:
-    m = float(minutos)
-    if m < 12 * 60:
-        return "mañana"
-    if m < 15 * 60:
-        return "mediodia"
-    return "tarde"
+    return franja_de_minuto(minutos)          # franja unificada (manana/mediodia/tarde)
 
 
 def _hhmm(minutos: float) -> str:

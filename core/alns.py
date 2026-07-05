@@ -20,6 +20,37 @@ from core.optimizer_ortools import ModeloNumerico, ParadaRuta, RutaCandidata
 
 PEN_CAP = 1e6
 PEN_UNSERVED = 1e7
+PEN_JORNADA = 1e4          # penalizacion por minuto de exceso sobre la jornada maxima del conductor
+
+
+def _duracion_ruta(ruta: List[int], modelo: ModeloNumerico) -> float:
+    """Duracion (span) de una ruta desde el inicio de jornada: viaje + espera de ventana +
+    servicio + retorno al hub. Coincide con RutaCandidata.tiempo_min (inicio_min=0), que es lo
+    que verifica candidate_generator._cumple_operativo contra la jornada maxima."""
+    if not ruta:
+        return 0.0
+    t_mat, serv, ven = modelo.tiempo_min, modelo.servicio_min, modelo.ventanas_min
+    t = 0.0
+    prev = 0
+    for c in ruta:
+        t += t_mat[prev][c]
+        ini, _ = ven[c]
+        if t < ini:
+            t = ini
+        t += serv[c]
+        prev = c
+    return t + t_mat[prev][0]
+
+
+def _pen_jornada(routes: List[List[int]], modelo: ModeloNumerico, jornada_max: float) -> float:
+    """Penalizacion total por exceso de jornada (0 si `jornada_max` <= 0 o no se excede)."""
+    if not jornada_max or jornada_max <= 0:
+        return 0.0
+    exceso = 0.0
+    for ruta in routes:
+        if ruta:
+            exceso += max(0.0, _duracion_ruta(ruta, modelo) - jornada_max)
+    return PEN_JORNADA * exceso
 
 
 def _cap(modelo: ModeloNumerico, r: int, kind: str) -> float:
@@ -34,8 +65,9 @@ def _carga(modelo, ruta, kind):
 
 
 def _evaluar(routes: List[List[int]], modelo: ModeloNumerico,
-             buffer: Optional[List[float]], w_tard: float) -> dict:
-    """Costo (a minimizar) y metricas de una solucion. Lateness usa el buffer SLA."""
+             buffer: Optional[List[float]], w_tard: float, jornada_max: float = 0.0) -> dict:
+    """Costo (a minimizar) y metricas de una solucion. Lateness usa el buffer SLA. Penaliza el
+    exceso sobre la jornada maxima del conductor (para que las candidatas ALNS la respeten)."""
     t_mat, serv, ven = modelo.tiempo_min, modelo.servicio_min, modelo.ventanas_min
     travel = tard = 0.0
     cap_viol = 0
@@ -63,9 +95,10 @@ def _evaluar(routes: List[List[int]], modelo: ModeloNumerico,
             servidos.add(c)
         travel += t_mat[prev][0]
     unserved = (len(modelo.pedido_ids) - 1) - len(servidos)
-    costo = travel + w_tard * tard + PEN_CAP * cap_viol + PEN_UNSERVED * unserved
+    pen_jor = _pen_jornada(routes, modelo, jornada_max)
+    costo = travel + w_tard * tard + PEN_CAP * cap_viol + PEN_UNSERVED * unserved + pen_jor
     return {"costo": costo, "travel": travel, "tard": tard, "unserved": unserved,
-            "cap_viol": cap_viol}
+            "cap_viol": cap_viol, "pen_jornada": pen_jor}
 
 
 def _copiar(routes):
@@ -107,9 +140,19 @@ def destruir_peor(routes, q, modelo, rng):
 # --------------------------------------------------------------------------- #
 # Operadores de reparacion
 # --------------------------------------------------------------------------- #
-def _mejor_insercion(routes, c, modelo):
-    """(costo, r, pos) de la mejor insercion factible de c (o None). Respeta capacidad y
-    cuadrilla: un pedido de instalacion solo entra en la ruta de un vehiculo con cuadrilla."""
+def _span_insercion(ruta: List[int], c: int, pos: int, modelo: ModeloNumerico) -> float:
+    """Duracion (span) REAL de `ruta` insertando c en `pos`, INCLUYENDO las esperas de apertura
+    de ventana. Es lo que hace que mezclar horarios incompatibles (p. ej. una parada de las 16:00
+    en medio de una oleada de las 10:00) dispare una espera ociosa y una duracion enorme."""
+    return _duracion_ruta(ruta[:pos] + [c] + ruta[pos:], modelo)
+
+
+def _mejor_insercion(routes, c, modelo, jornada_max: float = 0.0):
+    """(costo, r, pos) de la mejor insercion factible de c (o None). Respeta capacidad, cuadrilla
+    (un pedido de instalacion solo entra en la ruta de un vehiculo con cuadrilla) y la JORNADA
+    maxima del conductor. El GUARDIAN DE VENTANAS: la cota de jornada usa la duracion REAL de la
+    ruta resultante (con esperas de ventana), asi el reparador no agrupa horarios incompatibles
+    -> reparte esas paradas a otro vehiculo/oleada en vez de crear rutas con esperas de horas."""
     t = modelo.tiempo_min
     req = modelo.requiere_cuadrilla or []
     vc = modelo.vehiculo_cuadrilla or []
@@ -121,33 +164,54 @@ def _mejor_insercion(routes, c, modelo):
         if (_carga(modelo, ruta, "m3") + modelo.demanda_m3[c] > _cap(modelo, r, "m3") + 1e-6 or
                 _carga(modelo, ruta, "kg") + modelo.demanda_kg[c] > _cap(modelo, r, "kg") + 1e-6):
             continue
+        if jornada_max > 0 and _duracion_ruta(ruta, modelo) > jornada_max + 1.0:
+            continue                         # ruta ya llena (span > jornada): no agregar mas
         for pos in range(len(ruta) + 1):
             prev = ruta[pos - 1] if pos > 0 else 0
             nxt = ruta[pos] if pos < len(ruta) else 0
             costo = t[prev][c] + t[c][nxt] - t[prev][nxt]
+            if jornada_max > 0 and _span_insercion(ruta, c, pos, modelo) > jornada_max + 1.0:
+                continue                     # excederia la jornada (incl. esperas): otra ruta/oleada
             if mejor is None or costo < mejor[0]:
                 mejor = (costo, r, pos)
     return mejor
 
 
-def reparar_greedy(routes, removidos, modelo, rng):
-    rng.shuffle(removidos)
-    for c in removidos:
-        m = _mejor_insercion(routes, c, modelo)
-        if m is None:
-            routes.append([c])           # nueva ruta si no cabe en ninguna
-        else:
+def _necesita_crew(modelo, c) -> bool:
+    """True si el pedido c requiere cuadrilla y hay una restriccion real (no todos los vehiculos
+    la tienen). Estos pedidos tienen POCAS rutas factibles -> se insertan primero."""
+    req = modelo.requiere_cuadrilla or []
+    vc = modelo.vehiculo_cuadrilla or []
+    return bool(vc and c < len(req) and req[c] and not all(vc))
+
+
+def reparar_greedy(routes, removidos, modelo, rng, jornada_max: float = 0.0):
+    # Primero los pedidos con CUADRILLA (opciones escasas), luego el resto (orden aleatorio).
+    crew = [c for c in removidos if _necesita_crew(modelo, c)]
+    resto = [c for c in removidos if not _necesita_crew(modelo, c)]
+    rng.shuffle(crew); rng.shuffle(resto)
+    for c in crew + resto:
+        m = _mejor_insercion(routes, c, modelo, jornada_max)
+        if m is not None:
             routes[m[1]].insert(m[2], c)
+        # sin slot factible dentro de jornada -> c queda SIN SERVIR (drop, como la disyuncion de
+        # OR-Tools). Un pedido tan lejano que ni solo cabe en la jornada NO se fuerza a la ruta.
 
 
-def reparar_regret(routes, removidos, modelo, rng):
+def reparar_regret(routes, removidos, modelo, rng, jornada_max: float = 0.0):
+    vc = modelo.vehiculo_cuadrilla or []
     pend = list(removidos)
     while pend:
+        # Prioriza los pedidos con cuadrilla (menos rutas factibles) para que reserven su vehiculo.
+        candidatos = [c for c in pend if _necesita_crew(modelo, c)] or pend
         mejor_c, mejor_regret, mejor_ins = None, -1.0, None
-        for c in pend:
+        for c in candidatos:
+            crew_c = _necesita_crew(modelo, c)
             costos = []
             for r, ruta in enumerate(routes):
-                m = _mejor_insercion([ruta], c, modelo)  # costo en esa ruta
+                if crew_c and not (r < len(vc) and vc[r]):
+                    continue                    # cuadrilla: solo vehiculos con cuadrilla (r REAL)
+                m = _mejor_insercion([ruta], c, modelo, jornada_max)  # insercion FACTIBLE por jornada
                 if m is not None:
                     costos.append((m[0], r, m[2]))
             costos.sort()
@@ -162,10 +226,10 @@ def reparar_regret(routes, removidos, modelo, rng):
             if regret > mejor_regret:
                 mejor_c, mejor_regret, mejor_ins = c, regret, ins
         pend.remove(mejor_c)
-        if mejor_ins is None:
-            routes.append([mejor_c])
-        else:
+        if mejor_ins is not None:
             routes[mejor_ins[1]].insert(mejor_ins[2], mejor_c)
+        # si mejor_ins is None -> mejor_c queda SIN SERVIR (drop): ningun vehiculo lo sirve dentro
+        # de la jornada. Se penaliza como no servido en _evaluar (igual que la disyuncion OR-Tools).
 
 
 # --------------------------------------------------------------------------- #
@@ -222,21 +286,44 @@ def _desde_warm(warm: dict, nv: int) -> List[List[int]]:
 
 def optimizar(modelo: ModeloNumerico, params, *, perfil: Optional[PerfilDecision] = None,
               buffer_sla=None, warm: Optional[dict] = None, w_tard: float = 10.0,
-              n_elites: int = 3) -> dict:
-    """Ejecuta ALNS. Devuelve {'best': resultado, 'elites': [resultado,...]}."""
+              n_elites: int = 3, escenarios=None, alpha: float = 0.9,
+              beta: float = 1.0) -> dict:
+    """Ejecuta ALNS. Devuelve {'best': resultado, 'elites': [resultado,...]}.
+
+    Si se pasa `escenarios` (paquete SAA de core.saa), la busqueda optimiza el objetivo ROBUSTO
+    E[tardanza]+beta*CVaR_alpha(tardanza) sobre esos escenarios (robustez POR DISENO). Sin
+    `escenarios`, usa el costo deterministico con buffer SLA (comportamiento previo)."""
     rng = random.Random(int(params.semilla_base))
     nv = int(modelo.num_vehiculos)
     N = len(modelo.pedido_ids) - 1
     nombre = f"alns-{perfil.perfil}" if perfil else "alns"
 
+    # Jornada con horas extra: `jornada_max` = jornada normal (el exceso se PENALIZA en _evaluar);
+    # `jornada_cap` = jornada + overtime = tope DURO de insercion (mas alla se descarta el pedido).
+    jornada_max = float(getattr(params, "jornada_max_min", 0) or 0)
+    overtime = max(0.0, float(getattr(params, "overtime_max_min", 0) or 0))
+    jornada_cap = (jornada_max + overtime) if jornada_max > 0 else 0.0
+    if escenarios is not None:
+        from core.saa import evaluar_escenarios
+        def evaluar(routes):
+            return evaluar_escenarios(routes, modelo, w_tard, escenarios, alpha=alpha, beta=beta,
+                                      jornada_max=jornada_max)
+    else:
+        def evaluar(routes):
+            return _evaluar(routes, modelo, buffer_sla, w_tard, jornada_max=jornada_max)
+
     if warm and warm.get("rutas"):
         routes = _desde_warm(warm, nv)
+        presentes = {c for r in routes for c in r}
+        faltan = [c for c in range(1, N + 1) if c not in presentes]
+        if faltan:                       # el warm dejo clientes sin servir: se reinsertan
+            reparar_regret(routes, faltan, modelo, rng, jornada_cap)
     else:
         routes = [[] for _ in range(nv)]
-        reparar_regret(routes, list(range(1, N + 1)), modelo, rng)
+        reparar_regret(routes, list(range(1, N + 1)), modelo, rng, jornada_cap)
 
     cur = routes
-    cur_m = _evaluar(cur, modelo, buffer_sla, w_tard)
+    cur_m = evaluar(cur)
     best, best_m = _copiar(cur), dict(cur_m)
     elites = [(best_m["costo"], _copiar(best))]
 
@@ -270,8 +357,13 @@ def optimizar(modelo: ModeloNumerico, params, *, perfil: Optional[PerfilDecision
         q = rng.randint(qmin, qmax)
         cand = _copiar(cur)
         removidos = destruir[di](cand, q, modelo, rng)
-        reparar[ri](cand, removidos, modelo, rng)
-        cand_m = _evaluar(cand, modelo, buffer_sla, w_tard)
+        # Reintenta tambien los clientes SIN SERVIR (descartados antes): un pedido factible que
+        # quedo fuera puede reinsertarse; los infactibles (no caben en jornada) siguen fuera.
+        rem_set = set(removidos)
+        en_rutas = {c for ruta in cand for c in ruta}
+        faltantes = [c for c in range(1, N + 1) if c not in en_rutas and c not in rem_set]
+        reparar[ri](cand, removidos + faltantes, modelo, rng, jornada_cap)
+        cand_m = evaluar(cand)
 
         cd[di] += 1
         cr[ri] += 1

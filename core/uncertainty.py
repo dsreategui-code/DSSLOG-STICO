@@ -84,11 +84,72 @@ def _idx_macrozona(zonas) -> dict:
     return {z.distrito: z.macrozona for z in (zonas or [])}
 
 
+# --------------------------------------------------------------------------- #
+# MATCHER COMPARTIDO de incidencias (unico modelo para el simulador SimPy de
+# planificacion Y el Gemelo Digital). Ambos cruzan el MISMO catalogo real
+# (incidencias.csv) contra el nodo por distrito/macrozona y franja horaria.
+# --------------------------------------------------------------------------- #
+
+# Franjas del dia (minutos desde medianoche) para cruzar incidencias/trafico con la ETA.
+FRANJAS_DIA: Tuple[Tuple[str, float, float], ...] = (
+    ("manana", 0.0, 12 * 60.0), ("mediodia", 12 * 60.0, 15 * 60.0), ("tarde", 15 * 60.0, 24 * 60.0))
+
+# Descripciones legibles por tipo de incidencia (para el gemelo, alertas y reportes).
+DESC_INCIDENCIA = {
+    "congestion_severa": "Congestion severa de trafico",
+    "accidente_via": "Accidente en la via",
+    "bloqueo_manifestacion": "Bloqueo por manifestacion",
+    "via_cerrada_obra": "Via cerrada por obras",
+    "vehiculo_averiado": "Vehiculo averiado en la ruta",
+    "ambulante_via": "Comercio ambulante en la via",
+    "inseguridad_zona": "Demora por inseguridad en la zona",
+    "ausencia_cliente": "Cliente ausente (primer intento fallido)",
+}
+# Tipos validos que puede reportar cualquier modelo de incidencias del DSS.
+TIPOS_INCIDENCIA = frozenset(DESC_INCIDENCIA)
+
+
+def franja_de_minuto(minuto_abs: float) -> str:
+    """Franja horaria (manana/mediodia/tarde) de un minuto absoluto del dia (ETA)."""
+    m = float(minuto_abs) % (24 * 60.0)
+    for nombre, ini, fin in FRANJAS_DIA:
+        if ini <= m < fin:
+            return nombre
+    return "tarde"
+
+
+def descripcion_incidencia(tipo: str) -> str:
+    return DESC_INCIDENCIA.get(tipo, str(tipo).replace("_", " ").capitalize())
+
+
+def prob_ausencia(detalle_cliente) -> float:
+    """Probabilidad base de ausencia del cliente: residencial es mas propenso a no estar que
+    comercial (heuristica documentada, compartida por ambos modelos)."""
+    return 0.08 if str(detalle_cliente).lower().startswith("resid") else 0.04
+
+
+def incidencias_de_nodo(distrito: str, macrozona: str, incidencias: Sequence,
+                        franja: Optional[str] = None) -> list:
+    """Incidencias del catalogo que aplican a un nodo: matchean por distrito (especifico) o por
+    macrozona, y por franja horaria si se indica. Es el cruce comun a los dos modelos."""
+    out = []
+    for inc in (incidencias or []):
+        afecta = ((inc.distrito and inc.distrito == distrito)
+                  or (inc.macrozona and inc.macrozona == macrozona))
+        if not afecta:
+            continue
+        if franja and inc.franja and inc.franja != franja:
+            continue
+        out.append(inc)
+    return out
+
+
 def probabilidades_por_nodo(pedidos: Sequence, incidencias: Sequence, zonas: Sequence,
                             franja: Optional[str] = None
                             ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Deriva, por nodo (0 = HUB; 1..N = pedidos), la probabilidad e impacto de incidencia y
-    la probabilidad de ausencia del cliente, cruzando con incidencias.xlsx y zonas."""
+    la probabilidad de ausencia del cliente, cruzando con incidencias.csv y zonas mediante el
+    matcher compartido `incidencias_de_nodo` (mismo modelo que el Gemelo Digital)."""
     mz = _idx_macrozona(zonas)
     n = len(pedidos) + 1
     incid_prob = np.zeros(n)
@@ -96,20 +157,12 @@ def probabilidades_por_nodo(pedidos: Sequence, incidencias: Sequence, zonas: Seq
     ausencia = np.zeros(n)
     for k, p in enumerate(pedidos, start=1):
         macro = mz.get(p.distrito, "")
-        prob, delay = 0.0, 0.0
-        for inc in (incidencias or []):
-            afecta = ((inc.distrito and inc.distrito == p.distrito)
-                      or (inc.macrozona and inc.macrozona == macro))
-            if not afecta:
-                continue
-            if franja and inc.franja and inc.franja != franja:
-                continue
-            if inc.probabilidad > prob:       # se toma la incidencia mas probable del nodo
-                prob, delay = inc.probabilidad, inc.duracion_min
-        incid_prob[k] = prob
-        incid_delay[k] = delay
-        # Ausencia: residencial es mas propenso a no estar que comercial (heuristica documentada).
-        ausencia[k] = 0.08 if str(p.detalle_cliente).lower().startswith("resid") else 0.04
+        cands = incidencias_de_nodo(p.distrito, macro, incidencias, franja=franja)
+        if cands:
+            inc = max(cands, key=lambda i: i.probabilidad)   # incidencia mas probable del nodo
+            incid_prob[k] = inc.probabilidad
+            incid_delay[k] = inc.duracion_min
+        ausencia[k] = prob_ausencia(p.detalle_cliente)
     return incid_prob, incid_delay, ausencia
 
 

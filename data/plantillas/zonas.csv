@@ -15,3 +15,21 @@ Villa El Salvador,Sur,1.20,1.00,1.20,mixta,
 Villa Maria del Triunfo,Sur,1.25,1.00,1.25,mixta,
 Cercado de Lima,Centro,1.35,1.30,1.15,comercial,Centro historico congestionado
 La Victoria,Centro,1.30,1.15,1.25,comercial,Comercio denso
+La Perla,Oeste,1.05,1.05,1.05,residencial,Zona costera Callao
+Carmen de la Legua,Oeste,1.10,1.05,1.15,industrial,Zona industrial Callao
+Ventanilla,Oeste,1.25,1.00,1.25,mixta,Periferia norte del Callao
+Brena,Centro,1.25,1.15,1.15,mixta,
+Rimac,Centro,1.30,1.10,1.30,mixta,Calles estrechas centro historico
+San Luis,Centro,1.20,1.05,1.15,mixta,
+Independencia,Norte,1.20,1.00,1.20,mixta,
+Puente Piedra,Norte,1.30,1.00,1.25,mixta,Periferia norte lejana
+Chorrillos,Sur,1.15,1.10,1.15,mixta,Zona costera sur
+Lurin,Sur,1.25,1.00,1.15,industrial,Periferia sur lejana
+San Juan de Miraflores,Sur,1.25,1.00,1.25,mixta,
+Santa Anita,Este,1.20,1.00,1.15,industrial,Mercado mayorista de frutas
+El Agustino,Este,1.25,1.00,1.25,mixta,
+Surco,CentroSur,1.10,1.10,1.00,residencial,
+Magdalena,CentroSur,1.10,1.15,1.00,residencial,
+Jesus Maria,CentroSur,1.10,1.10,1.00,residencial,
+Pueblo Libre,CentroSur,1.10,1.10,1.00,residencial,
+Surquillo,CentroSur,1.15,1.15,1.05,mixta,Mercados y comercio

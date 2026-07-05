@@ -189,6 +189,27 @@ class FranjaTrafico:
 
 
 @dataclass
+class FranjaSeguridad:
+    """Curva de peligrosidad por FRANJA horaria (multiplicador). `macrozona` = "todas" define la
+    curva global; una macrozona especifica la sobreescribe (p. ej. el norte peor de noche)."""
+    macrozona: str
+    franja: str
+    hora_inicio: str
+    hora_fin: str
+    factor_seguridad: float = 1.0
+
+    @classmethod
+    def desde_fila(cls, fila) -> "FranjaSeguridad":
+        return cls(
+            macrozona=str(_f(fila, "macrozona", "todas")),
+            franja=str(_f(fila, "franja", "")),
+            hora_inicio=str(_f(fila, "hora_inicio", "00:00")),
+            hora_fin=str(_f(fila, "hora_fin", "23:59")),
+            factor_seguridad=_num(fila, "factor_seguridad", 1.0),
+        )
+
+
+@dataclass
 class EventoCalendario:
     fecha: str
     tipo_evento: str
@@ -293,7 +314,9 @@ class Parametros:
     semilla_base: int = 42
     tiempo_solver_seg: int = 10
     espera_max_min: int = 0
-    jornada_max_min: int = 540                # jornada MAXIMA del conductor (min); 9 h laboral
+    jornada_max_min: int = 540                # jornada normal del conductor (min); 9 h laboral
+    overtime_max_min: int = 120               # horas extra MAXIMAS sobre la jornada (min); 0 = sin overtime
+    penal_overtime: float = 6.0               # penalizacion por minuto de hora extra (min-equivalente)
     # --- Restricciones operativas ---
     frac_cuadrillas: float = 0.5              # fraccion de la flota con cuadrilla de instalacion
     descanso_min: int = 45                    # duracion del almuerzo/descanso (0 = desactivado)
@@ -310,8 +333,18 @@ class Parametros:
     cv_tiempo: float = 0.25                   # coef. de variacion del tiempo de viaje (buffer SLA)
     usar_alns: bool = True                    # refinar candidatas con ALNS (metaheuristica)
     iteraciones_alns: int = 250               # presupuesto de iteraciones del ALNS
+    usar_saa: bool = True                     # robustez POR DISENO: SAA + objetivo CVaR en el ALNS
+    n_escenarios_saa: int = 20                # nº de escenarios SAA (numeros aleatorios comunes)
+    # --- Seguridad (peligrosidad por hora y distrito) ---
+    usar_seguridad_horaria: bool = True       # penaliza servir distritos peligrosos de noche
+    hora_riesgo_seguridad: str = "17:00"      # a partir de esta hora, servir zonas peligrosas penaliza
+    umbral_peligrosidad: float = 1.15         # factor_seguridad del distrito > umbral => "peligroso"
+    penal_seguridad: float = 1.5              # peso (min-equivalente) de la penalizacion de seguridad
     usar_osrm: bool = True
     usar_cache_osrm: bool = True
+    usar_clima: bool = True                    # factor climatico del dia (Open-Meteo); respaldo 1.0
+    usar_feriados: bool = True                  # feriados reales (Nager.Date) al calendario de eventos
+    pais_feriados: str = "PE"                   # codigo de pais para los feriados
     velocidad_simulacion_demo: float = 1.0
 
     @classmethod

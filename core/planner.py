@@ -84,7 +84,8 @@ def _escenario_desde_evaluacion(contexto, pedidos, modelo, evaluacion) -> dict:
                 "tardanza_min": round(s.tardanza_min, 1),
                 "iri": float(iri_map.get(p.pedido_id, 0.0)),
                 "ventana_fin_min": hhmm_to_minutes(p.ventana_fin),
-                "distrito": p.distrito})
+                "distrito": p.distrito,
+                "detalle_cliente": getattr(p, "detalle_cliente", "")})
         if paradas:
             rutas[veh] = paradas
             geometrias[veh] = ([[hub.lon, hub.lat]]
@@ -133,21 +134,59 @@ def planificar(contexto: dict, *, fecha: Optional[str] = None, osrm=None,
 
     base = matriz_base_tiempos(hub, pedidos, params, osrm)
     nodos = construir_nodos(hub, pedidos)
+
+    # Factor CLIMA del dia (Open-Meteo): neblina/lluvia -> jornada mas lenta. cache-first + respaldo
+    # (sin internet o si falla -> 1.0). Es un factor GLOBAL del contexto.
+    factor_clima = 1.0
+    if getattr(params, "usar_clima", True):
+        try:
+            from services.clima_client import ClimaClient
+            clima = ClimaClient().factor_clima(fecha, hub.lat, hub.lon,
+                                               hora_ini=hub.hora_apertura, hora_fin=hub.hora_cierre)
+            factor_clima = float(clima.get("factor", 1.0) or 1.0)
+        except Exception:  # noqa: BLE001
+            factor_clima = 1.0
+
     ctx_mat = construir_matriz_contextual(
         base["tiempo_min"], nodos, contexto["zonas"], contexto["trafico"],
-        eventos=contexto["eventos"], fecha=fecha, hora_ref=hora_ref)
+        eventos=contexto["eventos"], fecha=fecha, hora_ref=hora_ref,
+        seguridad_horaria=contexto.get("seguridad_horaria"), factor_clima=factor_clima)
+
+    # Peligrosidad por pedido (factor de seguridad del distrito) para agendar zonas de riesgo de dia.
+    zona_idx = {z.distrito: z for z in contexto["zonas"]}
+    peligro_pedidos = [float(getattr(zona_idx.get(p.distrito), "factor_seguridad", 1.0) or 1.0)
+                       for p in pedidos]
+    hora_riesgo = str(getattr(params, "hora_riesgo_seguridad", "") or "") \
+        if getattr(params, "usar_seguridad_horaria", True) else ""
 
     modelo = preparar_modelo(hub, pedidos, vehiculos, ctx_mat["matriz"], base["dist_km"],
                              tiempos_servicio=contexto.get("tiempos_servicio"),
                              jornada_inicio=hub.hora_apertura, jornada_fin=hub.hora_cierre,
-                             frac_cuadrillas=float(getattr(params, "frac_cuadrillas", 0.5)))
+                             frac_cuadrillas=float(getattr(params, "frac_cuadrillas", 0.5)),
+                             peligrosidad=peligro_pedidos, hora_riesgo_seguridad=hora_riesgo)
 
     # Ventanas probabilisticas: buffer de nivel de servicio por nodo (chance-constrained).
     from core.uncertainty import buffer_sla_por_nodo
     buffer_sla = buffer_sla_por_nodo(ctx_mat["matriz"], cv=float(params.cv_tiempo),
                                      alpha=float(params.nivel_servicio))
 
-    candidatas = generar_candidatas(modelo, contexto["perfiles"], params, buffer_sla=buffer_sla)
+    # SAA para ROBUSTEZ POR DISENO en el ALNS: paquete de escenarios (numeros aleatorios comunes)
+    # con el MISMO catalogo de incidencias unificado + factor sistemico del dia (nominal) +
+    # trafico dependiente de la hora. El ALNS optimiza E[tardanza]+beta*CVaR_alpha(tardanza).
+    escenarios_saa = None
+    if robusto and getattr(params, "usar_saa", True) and getattr(params, "usar_alns", True):
+        from core.saa import construir_escenarios
+        from core.uncertainty import perfil_td_franjas, probabilidades_por_nodo
+        ip, idl, au = probabilidades_por_nodo(pedidos, contexto["incidencias"], contexto["zonas"])
+        franjas_td_saa = perfil_td_franjas(contexto["trafico"],
+                                           jornada_inicio=hub.hora_apertura, hora_ref=hora_ref)
+        escenarios_saa = construir_escenarios(
+            modelo, ip, idl, au, n_escenarios=int(getattr(params, "n_escenarios_saa", 20)),
+            sigma_viaje=float(params.cv_tiempo), sigma_sistemico=0.10,
+            franjas_td=franjas_td_saa, seed=int(params.semilla_base))
+
+    candidatas = generar_candidatas(modelo, contexto["perfiles"], params, buffer_sla=buffer_sla,
+                                    escenarios_saa=escenarios_saa, alpha=alpha, beta=beta)
 
     if robusto:
         from core.robust_evaluation import evaluar_robusto, recomendar_robusto

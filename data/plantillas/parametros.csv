@@ -4,6 +4,8 @@ semilla_base,42
 tiempo_solver_seg,10
 espera_max_min,0
 jornada_max_min,540
+overtime_max_min,120
+penal_overtime,6.0
 frac_cuadrillas,0.5
 descanso_min,45
 descanso_desde_min,180
@@ -19,6 +21,15 @@ nivel_servicio,0.90
 cv_tiempo,0.25
 usar_alns,1
 iteraciones_alns,250
+usar_saa,1
+n_escenarios_saa,20
+usar_seguridad_horaria,1
+hora_riesgo_seguridad,17:00
+umbral_peligrosidad,1.15
+penal_seguridad,1.5
 usar_osrm,1
 usar_cache_osrm,1
+usar_clima,1
+usar_feriados,1
+pais_feriados,PE
 velocidad_simulacion_demo,1.0

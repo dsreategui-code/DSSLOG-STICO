@@ -20,8 +20,8 @@ def test_todas_las_candidatas_respetan_cuadrillas_y_jornada():
             for s in rc.secuencia:
                 if s.pedido_id in req:
                     assert veh in crew, f"{veh} sin cuadrilla atendio {s.pedido_id}"
-            # (1) jornada: el turno (span = fin - inicio) no excede la jornada maxima
-            assert (rc.tiempo_min - rc.inicio_min) <= par.jornada_max_min + 1
+            # (1) jornada: el turno (span = fin - inicio) no excede la jornada + horas extra
+            assert (rc.tiempo_min - rc.inicio_min) <= par.jornada_max_min + par.overtime_max_min + 1
 
 
 def _ruta(veh, nodos, inicio=0.0, fin=100.0):
@@ -42,6 +42,33 @@ def _modelo(req_cuadrilla, veh_cuadrilla, veh_ids):
         num_vehiculos=len(veh_ids), cap_m3=[0.0] * len(veh_ids), cap_kg=[0.0] * len(veh_ids),
         vehiculo_ids=veh_ids, horizonte_min=600,
         requiere_cuadrilla=req_cuadrilla, vehiculo_cuadrilla=veh_cuadrilla)
+
+
+def test_overtime_evita_descartar():
+    # 1 vehiculo, 2 pedidos: servir ambos = span 560 (entre 540 y 660). Sin overtime no caben
+    # ambos -> se descarta uno; con overtime (hasta +120) caben (20 min extra, penalizados).
+    import numpy as np
+    from core.data_models import Parametros, PerfilDecision
+    from core.optimizer_ortools import ModeloNumerico, resolver_cvrptw
+    t = np.array([[0, 10, 250], [10, 0, 250], [270, 250, 0]], dtype=float)
+
+    def _modelo_ot():
+        return ModeloNumerico(
+            tiempo_min=t, dist_km=t * 0.4, demanda_m3=[0, 1, 1], demanda_kg=[0, 10, 10],
+            ventanas_min=[(0, 600), (0, 600), (0, 600)], servicio_min=[0, 15, 15],
+            pedido_ids=["HUB", "P1", "P2"], num_vehiculos=1, cap_m3=[100], cap_kg=[100],
+            vehiculo_ids=["V1"], horizonte_min=600)
+
+    perfil = PerfilDecision("eficiente", w_tiempo=1.0, w_tardanza=0.4, w_riesgo=0.3)
+
+    def _servidos(ot):
+        par = Parametros(tiempo_solver_seg=3, jornada_max_min=540, overtime_max_min=ot,
+                         penal_overtime=6.0, usar_alns=False, usar_seguridad_horaria=False)
+        r = resolver_cvrptw(_modelo_ot(), perfil, par)
+        return sum(rc.n_paradas for rc in r["rutas"].values())
+
+    assert _servidos(0) == 1        # sin horas extra: no caben ambos en la jornada -> descarta uno
+    assert _servidos(120) == 2      # con horas extra: caben ambos (span 560 <= 660)
 
 
 def test_cumple_operativo_detecta_violaciones():

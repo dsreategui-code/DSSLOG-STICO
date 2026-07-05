@@ -91,9 +91,8 @@ def test_otif_menor_o_igual_que_otd_y_por_pedido():
 
 def test_incidencias_traen_causa_tipificada():
     esc, inc = simular_incidencias(_esc(), tasa=0.3, seed=2)
-    from core.twin_sim import CATALOGO_INCIDENCIAS
-    tipos_validos = {c["tipo"] for c in CATALOGO_INCIDENCIAS}
-    assert inc and all(x["tipo"] in tipos_validos for x in inc)
+    from core.uncertainty import TIPOS_INCIDENCIA
+    assert inc and all(x["tipo"] in TIPOS_INCIDENCIA for x in inc)
     assert all(x["severidad"] in ("baja", "media", "alta") for x in inc)
     ti = tabla_incidencias(inc)
     assert {"tipo", "descripcion", "severidad", "franja", "retraso_min"} <= set(ti.columns)
@@ -133,3 +132,67 @@ def test_reruteo_conserva_todos_los_pedidos():
     ids_sin = sorted(p["pedido_id"] for r in esc_sin["rutas"].values() for p in r)
     ids_con = sorted(p["pedido_id"] for r in esc_con["rutas"].values() for p in r)
     assert ids_sin == ids_con                          # custodia: no se pierde ni transfiere
+
+
+def _esc_riesgo(ventana_py=560):
+    """Escenario minimo SIN incidencia: PY (cerca del hub, ventana AJUSTADA) esta en la ruta
+    DESPUES de PX (lejos, ventana holgada) -> PY llega tarde. Reordenar (PY primero) lo salva."""
+    return {
+        "hub": {"nombre": "HUB", "lat": -12.00, "lon": -77.00},
+        "t_inicio_min": 540.0, "jornada_fin_min": 1140,
+        "geometrias": {"V1": [[-77.00, -12.00]]},
+        "rutas": {"V1": [
+            {"pedido_id": "PX", "coord": (-12.20, -77.00), "eta_min": 642.0, "servicio_min": 10.0,
+             "ventana_fin_min": 1200.0, "tardanza_min": 0.0, "incidencia": False,
+             "incidencia_min": 0.0, "primer_intento_ok": True, "iri": 0.0, "distrito": "Lurin"},
+            {"pedido_id": "PY", "coord": (-12.01, -77.00), "eta_min": 750.0, "servicio_min": 10.0,
+             "ventana_fin_min": float(ventana_py), "tardanza_min": max(0.0, 750.0 - ventana_py),
+             "incidencia": False, "incidencia_min": 0.0, "primer_intento_ok": True,
+             "iri": 0.0, "distrito": "Callao"},
+        ]},
+    }
+
+
+def test_reruteo_por_riesgo_de_ventana_sin_incidencia():
+    props = proponer_reruteo(_esc_riesgo(ventana_py=560))
+    assert len(props) == 1
+    p = props[0]
+    assert p["motivo"] == "riesgo de ventana"       # disparo por riesgo, no por incidencia
+    assert p["ancla_idx"] == -1                       # re-planifica todo el vehiculo
+    assert p["orden_propuesto"] == ["PY", "PX"]       # PY (ventana ajustada) primero
+    assert p["recuperadas"] >= 1                       # recupera al menos una entrega
+
+
+def test_reruteo_por_riesgo_no_empeora_y_recupera():
+    esc = _esc_riesgo(ventana_py=560)
+    esc_con, _ = mitigar_con_reruteo(esc)
+    assert resumen_operacion(esc_con)["otd"] >= resumen_operacion(esc)["otd"]
+
+
+def test_sin_riesgo_ni_incidencia_no_propone():
+    # PY con ventana holgada: no hay riesgo -> no se toca un vehiculo sano.
+    assert proponer_reruteo(_esc_riesgo(ventana_py=1200)) == []
+
+
+def _esc_jornada():
+    """Ruta larga (ventanas holgadas) cuyo span excede la jornada; reordenar por cercania
+    (vecino-mas-cercano) la acorta y baja el exceso de jornada."""
+    def _p(pid, lat, distrito):
+        return {"pedido_id": pid, "coord": (lat, -77.00), "eta_min": 1000.0, "servicio_min": 20.0,
+                "ventana_fin_min": 1400.0, "tardanza_min": 0.0, "incidencia": False,
+                "incidencia_min": 0.0, "primer_intento_ok": True, "iri": 0.0, "distrito": distrito}
+    return {
+        "hub": {"nombre": "HUB", "lat": -12.00, "lon": -77.00}, "t_inicio_min": 540.0,
+        "jornada_fin_min": 1140, "geometrias": {"V1": [[-77.00, -12.00]]},
+        "rutas": {"V1": [_p("A", -12.30, "Lurin"), _p("B", -12.02, "Callao"),
+                         _p("C", -12.32, "Lurin")]},
+    }
+
+
+def test_reruteo_por_riesgo_de_jornada():
+    props = proponer_reruteo(_esc_jornada(), jornada_max=540.0)
+    assert len(props) == 1
+    p = props[0]
+    assert p["motivo"] == "riesgo de jornada"
+    assert p["jornada_propuesta_min"] < p["jornada_actual_min"]   # reduce el exceso de jornada
+    assert p["tarde_propuesto"] <= p["tarde_actual"]               # sin empeorar ventanas

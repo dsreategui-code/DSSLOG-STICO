@@ -52,10 +52,16 @@ def preparar_modelo(hub: Hub, pedidos: Sequence[Pedido], vehiculos: Sequence[Veh
                     tiempos_servicio: Optional[Sequence[TiempoServicio]] = None,
                     jornada_inicio: str = "09:00", jornada_fin: str = "19:00",
                     servicio_defecto: float = 5.0,
-                    frac_cuadrillas: float = 0.5) -> ModeloNumerico:
+                    frac_cuadrillas: float = 0.5,
+                    peligrosidad: Optional[Sequence[float]] = None,
+                    hora_riesgo_seguridad: str = "") -> ModeloNumerico:
     """Construye la instancia numerica (nodo 0 = HUB) lista para el resolvedor."""
     t0 = hhmm_to_minutes(jornada_inicio)
     H = hhmm_to_minutes(jornada_fin) - t0
+    # Hora de riesgo de seguridad relativa al inicio de jornada (0 = desactivada).
+    hora_riesgo_min = 0.0
+    if hora_riesgo_seguridad:
+        hora_riesgo_min = float(max(0, min(H, hhmm_to_minutes(hora_riesgo_seguridad) - t0)))
     tmap = {ts.tipo_pedido: ts for ts in (tiempos_servicio or [])}
 
     ventanas = [(0, H)]
@@ -90,6 +96,8 @@ def preparar_modelo(hub: Hub, pedidos: Sequence[Pedido], vehiculos: Sequence[Veh
         horizonte_min=H,
         requiere_cuadrilla=req_cuadrilla,
         vehiculo_cuadrilla=veh_cuadrilla,
+        peligrosidad=([1.0] + [float(x) for x in peligrosidad]) if peligrosidad is not None else [],
+        hora_riesgo_min=hora_riesgo_min,
     )
 
 
@@ -117,10 +125,13 @@ def kpis_candidata(resultado: dict, modelo: ModeloNumerico) -> dict:
 
 
 def generar_candidatas(modelo: ModeloNumerico, perfiles: Sequence[PerfilDecision],
-                       params: Parametros, buffer_sla=None) -> List[dict]:
+                       params: Parametros, buffer_sla=None, escenarios_saa=None,
+                       alpha: float = 0.9, beta: float = 1.0) -> List[dict]:
     """Genera candidatas: una por perfil con OR-Tools (ventanas probabilisticas via
     `buffer_sla`) y, si `params.usar_alns`, refina la mejor con ALNS y agrega sus elites
-    diversas. Devuelve [{perfil, resultado, kpis}]."""
+    diversas. Si se pasa `escenarios_saa` (paquete SAA), el ALNS optimiza el objetivo ROBUSTO
+    E[tardanza]+beta*CVaR_alpha(tardanza) sobre esos escenarios (robustez por diseno).
+    Devuelve [{perfil, resultado, kpis}]."""
     candidatas = []
     mejor_ot, mejor_clave = None, (float("inf"), float("inf"))
     for perfil in perfiles:
@@ -137,11 +148,14 @@ def generar_candidatas(modelo: ModeloNumerico, perfiles: Sequence[PerfilDecision
         from core.alns import optimizar
         perfil_alns = PerfilDecision("robusta", w_tiempo=0.6, w_tardanza=1.0, w_riesgo=1.0)
         out = optimizar(modelo, params, perfil=perfil_alns, buffer_sla=buffer_sla,
-                        warm=mejor_ot, n_elites=2)
+                        warm=mejor_ot, n_elites=2, escenarios=escenarios_saa,
+                        alpha=alpha, beta=beta)
         jornada_max = int(getattr(params, "jornada_max_min", 0) or 0)
+        jornada_cap = jornada_max + max(0, int(getattr(params, "overtime_max_min", 0) or 0)) \
+            if jornada_max else 0                       # admite hasta jornada + horas extra
         for i, res_e in enumerate([out["best"]] + out["elites"]):
             if (res_e and res_e.get("status") == "ok" and res_e.get("rutas")
-                    and _cumple_operativo(res_e, modelo, jornada_max)):
+                    and _cumple_operativo(res_e, modelo, jornada_cap)):
                 res_e["perfil"] = f"alns-{i}"          # etiqueta unica por candidata ALNS
                 candidatas.append({"perfil": f"alns-{i}", "resultado": res_e,
                                    "kpis": kpis_candidata(res_e, modelo)})

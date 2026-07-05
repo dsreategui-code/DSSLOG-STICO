@@ -75,6 +75,8 @@ class ModeloNumerico:
     # Restricciones operativas (opcionales; vacio = sin restriccion):
     requiere_cuadrilla: List[bool] = field(default_factory=list)   # por nodo (0=HUB=False)
     vehiculo_cuadrilla: List[bool] = field(default_factory=list)   # por vehiculo
+    peligrosidad: List[float] = field(default_factory=list)        # por nodo: factor de seguridad del distrito
+    hora_riesgo_min: float = 0.0                                   # hora de riesgo de seguridad (min desde jornada; 0=off)
 
 
 def resolver_cvrptw(modelo: ModeloNumerico, perfil: PerfilDecision,
@@ -121,23 +123,38 @@ def resolver_cvrptw(modelo: ModeloNumerico, perfil: PerfilDecision,
 
     coef_tard = int(round(params.penalizacion_tardanza * perfil.w_tardanza * ESCALA))
     coef_riesgo = int(round(params.penalizacion_riesgo * perfil.w_riesgo * ESCALA))
+    # Seguridad: servir distritos PELIGROSOS de dia (limite blando en la hora de riesgo).
+    peligro = list(modelo.peligrosidad or [])
+    hora_riesgo = float(getattr(modelo, "hora_riesgo_min", 0.0) or 0.0)
+    umbral_pel = float(getattr(params, "umbral_peligrosidad", 1.15))
+    penal_seg = float(getattr(params, "penal_seguridad", 1.5))
+    seg_on = bool(getattr(params, "usar_seguridad_horaria", False) and peligro and 0 < hora_riesgo < H)
     for node in range(n):
         idx = mgr.NodeToIndex(node)
         ini, fin = modelo.ventanas_min[node]
         ini = max(0, int(ini)); fin = min(H, int(fin))
         tdim.CumulVar(idx).SetRange(ini, max(ini, fin))
-        if node != 0:
-            # Penalizacion suave por tardanza (arribo despues del cierre).
-            if coef_tard > 0:
-                tdim.SetCumulVarSoftUpperBound(idx, fin, coef_tard)
-            # Penalizacion suave por riesgo: arribar con poco margen al cierre. El margen es
-            # el buffer de nivel de servicio (chance-constrained) si se entrega, o fijo.
-            if coef_riesgo > 0:
-                buf = (int(round(buffer_sla_min[node]))
-                       if buffer_sla_min is not None and node < len(buffer_sla_min)
-                       else MARGEN_RIESGO_MIN)
-                margen = max(ini, fin - buf)
-                tdim.SetCumulVarSoftUpperBound(idx, margen, coef_riesgo)
+        if node == 0:
+            continue
+        # Un unico limite superior BLANDO de arribo, el MAS ESTRICTO entre: cierre de ventana
+        # (tardanza), cierre - buffer SLA (riesgo de ventana) y la hora de riesgo de seguridad si
+        # el distrito es peligroso. Los coeficientes se suman (mayor castigo si concurren).
+        bound = None                                     # (umbral_min, coeficiente)
+        if coef_tard > 0:
+            bound = (fin, coef_tard)
+        if coef_riesgo > 0:
+            buf = (int(round(buffer_sla_min[node]))
+                   if buffer_sla_min is not None and node < len(buffer_sla_min)
+                   else MARGEN_RIESGO_MIN)
+            margen = max(ini, fin - buf)
+            bound = (margen, coef_riesgo)                # comportamiento previo (ultimo prevalece)
+        if seg_on and node < len(peligro) and peligro[node] > umbral_pel:
+            coef_seg = int(round((peligro[node] - 1.0) * penal_seg * ESCALA))
+            if coef_seg > 0:
+                hr = max(ini, int(hora_riesgo))
+                bound = (hr, coef_seg) if bound is None else (min(bound[0], hr), bound[1] + coef_seg)
+        if bound is not None and bound[1] > 0:
+            tdim.SetCumulVarSoftUpperBound(idx, int(bound[0]), int(bound[1]))
 
     # Balance de carga entre rutas (w_balance) via penalizacion del span de tiempo.
     if perfil.w_balance > 0:
@@ -155,11 +172,19 @@ def resolver_cvrptw(modelo: ModeloNumerico, perfil: PerfilDecision,
         _dim_capacidad(modelo.demanda_kg, modelo.cap_kg, "Peso", 1)
 
     # --- Restricciones operativas ---
-    # (1) Jornada MAXIMA del conductor: el span de la ruta (fin - inicio) <= jornada_max.
+    # (1) Jornada del conductor con HORAS EXTRA: tope BLANDO en la jornada normal (cada minuto
+    # extra se penaliza) y tope DURO en jornada + overtime. Asi un pedido no se DESCARTA si aun
+    # cabe en horas extra; el overtime se usa como ultimo recurso (mas barato que no atender).
     jornada_max = int(getattr(params, "jornada_max_min", H) or H)
+    overtime = max(0, int(getattr(params, "overtime_max_min", 0) or 0))
+    coef_ot = int(round(float(getattr(params, "penal_overtime", 0.0)) * ESCALA))
     if 0 < jornada_max < H:
+        cap = min(H, jornada_max + overtime)
         for v in range(nv):
-            tdim.SetSpanUpperBoundForVehicle(jornada_max, v)
+            tdim.SetSpanUpperBoundForVehicle(cap, v)                    # tope duro: jornada + overtime
+            if overtime > 0 and coef_ot > 0:
+                tdim.SetSoftSpanUpperBoundForVehicle(
+                    pywrapcp.BoundCost(jornada_max, coef_ot), v)        # blando: penaliza cada min extra
 
     # (2) Cuadrillas: los pedidos de instalacion solo los pueden atender vehiculos con cuadrilla.
     veh_cuad = list(modelo.vehiculo_cuadrilla or [])

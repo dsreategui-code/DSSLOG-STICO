@@ -55,6 +55,7 @@ def construir_escenario_demo(num_vehiculos: int = 6) -> dict:
             "pedido_id": str(r["pedido_id"]),
             "coord": (float(r["latitud"]), float(r["longitud"])),
             "distrito": str(r.get("distrito", "")),
+            "detalle_cliente": str(r.get("detalle_cliente", "")),
             "ventana_fin_min": hhmm_to_minutes(str(r.get("ventana_fin", "19:00"))),
             "servicio_min": float(r.get("tiempo_servicio_min", SERVICIO_DEFECTO_MIN) or SERVICIO_DEFECTO_MIN),
         })
@@ -87,7 +88,7 @@ def construir_escenario_demo(num_vehiculos: int = 6) -> dict:
                 "pedido_id": p["pedido_id"], "coord": p["coord"], "eta_min": round(eta, 1),
                 "servicio_min": p["servicio_min"], "tardanza_min": round(tardanza, 1),
                 "iri": iri, "ventana_fin_min": p["ventana_fin_min"],
-                "distrito": p["distrito"]})
+                "distrito": p["distrito"], "detalle_cliente": p.get("detalle_cliente", "")})
             t += p["servicio_min"]
             prev = p["coord"]
         rutas[veh] = paradas

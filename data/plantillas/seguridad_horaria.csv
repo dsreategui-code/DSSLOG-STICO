@@ -1,0 +1,12 @@
+macrozona,franja,hora_inicio,hora_fin,factor_seguridad
+todas,madrugada,00:00,06:00,1.35
+todas,manana,06:00,12:00,1.00
+todas,mediodia,12:00,15:00,1.00
+todas,tarde,15:00,18:00,1.10
+todas,noche,18:00,23:59,1.30
+Norte,tarde,15:00,18:00,1.25
+Norte,noche,18:00,23:59,1.55
+Este,tarde,15:00,18:00,1.20
+Este,noche,18:00,23:59,1.50
+Centro,noche,18:00,23:59,1.45
+Sur,noche,18:00,23:59,1.35

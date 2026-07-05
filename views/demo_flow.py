@@ -382,8 +382,9 @@ def _paso_motor():
 def _resultados(esc_ini, esc_inc, esc_fin, incidencias, tasa, mult):
     r_inc = resumen_operacion(esc_inc, incidencias)
     r_fin = resumen_operacion(esc_fin, incidencias)
-    var = variabilidad_operacion(esc_ini, tasa=tasa, mult_retraso=mult,
-                                 n_corridas=25, seed=0)
+    ctx = st.session_state.df_ctx
+    var = variabilidad_operacion(esc_ini, tasa=tasa, mult_retraso=mult, n_corridas=25, seed=0,
+                                 incidencias=ctx["incidencias"], zonas=ctx["zonas"])
     tab_g, tab_c, tab_i, tab_cmp = st.tabs(
         ["Generales", "Por camion", "Incidencias", "Inicial vs final"])
 
@@ -486,9 +487,11 @@ def _paso_gemelo():
                f"(retraso x{mult:g})  ·  viaje con factor de circuito (aprox. calle sin OSRM)  "
                f"·  gemelo simulado, no tiempo real.")
 
+    ctx = st.session_state.df_ctx
     _enriquecer_geometrias(esc_ini)              # rutas por calle (OSRM) para el gemelo
     esc_inc, incidencias = simular_incidencias(
-        esc_ini, tasa=tasa, seed=int(st.session_state.df_seed), mult_retraso=mult)
+        esc_ini, tasa=tasa, seed=int(st.session_state.df_seed), mult_retraso=mult,
+        incidencias=ctx["incidencias"], zonas=ctx["zonas"])
     esc_fin, _ = mitigar_con_reruteo(esc_inc)
 
     tab_op, tab_res = st.tabs(["Operacion (en vivo)", "Resultados"])

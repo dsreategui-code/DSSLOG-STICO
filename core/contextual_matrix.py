@@ -63,6 +63,27 @@ def resolver_franja(hora_hhmm: str, trafico: Sequence[FranjaTrafico],
     return None
 
 
+def curva_seguridad(hora_hhmm: str, seguridad: Optional[Sequence], macrozona: str = "") -> float:
+    """Multiplicador de peligrosidad por la FRANJA que contiene `hora_hhmm`. Una entrada de la
+    macrozona especifica sobreescribe a la global ("todas"). 1.0 si no hay curva."""
+    if not seguridad:
+        return 1.0
+    t = hhmm_to_minutes(hora_hhmm)
+
+    def _match(items):
+        for f in items:
+            if hhmm_to_minutes(f.hora_inicio) <= t <= hhmm_to_minutes(f.hora_fin):
+                return float(f.factor_seguridad)
+        return None
+
+    especifica = _match([f for f in seguridad if macrozona and f.macrozona == macrozona])
+    if especifica is not None:
+        return especifica
+    global_ = _match([f for f in seguridad
+                      if str(f.macrozona).lower() in ("", "todas", "todos")])
+    return global_ if global_ is not None else 1.0
+
+
 def _indice_zonas(zonas: Sequence[Zona]) -> Dict[str, Zona]:
     return {z.distrito: z for z in zonas}
 
@@ -77,8 +98,12 @@ def factores_por_nodo(nodos: List[dict], zonas: Sequence[Zona],
                       eventos: Optional[Sequence[EventoCalendario]] = None,
                       incidencias_activas: Optional[Sequence[Incidencia]] = None,
                       fecha: Optional[str] = None, hora_ref: str = "09:00",
-                      clamp: tuple = CLAMP_FACTOR) -> pd.DataFrame:
-    """Desglose TRAZABLE de factores por nodo destino. Nodo 0 (HUB) = todos 1.0."""
+                      clamp: tuple = CLAMP_FACTOR,
+                      seguridad_horaria: Optional[Sequence] = None,
+                      factor_clima: float = 1.0) -> pd.DataFrame:
+    """Desglose TRAZABLE de factores por nodo destino. `factor_clima` es GLOBAL (clima del dia,
+    p. ej. neblina) y multiplica a todos los nodos, incluido el HUB (afecta tambien los retornos)."""
+    fc = float(factor_clima) if factor_clima else 1.0
     zidx = _indice_zonas(zonas)
     eventos = list(eventos or [])
     incidencias_activas = list(incidencias_activas or [])
@@ -92,21 +117,24 @@ def factores_por_nodo(nodos: List[dict], zonas: Sequence[Zona],
             filas.append({"idx": 0, "distrito": distrito, "macrozona": macro,
                           "f_trafico": 1.0, "f_zona": 1.0, "f_evento": 1.0,
                           "f_seguridad": 1.0, "f_servicio": 1.0, "f_incidencia": 1.0,
-                          "f_total": 1.0})
+                          "f_clima": round(fc, 4),
+                          "f_total": round(_clamp(fc, CLAMP_TOTAL[0], CLAMP_TOTAL[1]), 4)})
             continue
 
         z = zidx.get(distrito)
         # F_zona: acceso x estacionamiento del destino.
         f_zona = _clamp((z.factor_acceso * z.factor_estacionamiento) if z else 1.0, lo, hi)
-        # F_seguridad: > 1 penaliza zonas de mayor riesgo.
-        f_seg = _clamp(z.factor_seguridad if z else 1.0, lo, hi)
+        # F_seguridad: peligrosidad del distrito MODULADA por la curva horaria (peor de noche).
+        curva_seg = curva_seguridad(hora_ref, seguridad_horaria, macro)
+        f_seg = _clamp((z.factor_seguridad if z else 1.0) * curva_seg, lo, hi)
         # F_trafico: por franja horaria de referencia + macrozona.
         fr = resolver_franja(hora_ref, trafico, macro)
         f_traf = _clamp(fr.factor_trafico if fr else 1.0, lo, hi)
-        # F_evento: producto de eventos del calendario activos en `fecha` que afecten al nodo.
+        # F_evento: eventos del calendario que afectan al nodo. Un evento FECHADO solo aplica al
+        # planificar para ESA fecha (con fecha=None -> dia tipico, sin eventos especiales).
         f_evt = 1.0
         for ev in eventos:
-            if fecha is not None and str(ev.fecha) != str(fecha):
+            if ev.fecha and (fecha is None or str(ev.fecha) != str(fecha)):
                 continue
             za = str(ev.zonas_afectadas).strip().lower()
             global_ = za in ("", "todas", "todos")
@@ -125,13 +153,13 @@ def factores_por_nodo(nodos: List[dict], zonas: Sequence[Zona],
                 f_inc *= inc.impacto_tiempo
         f_inc = _clamp(f_inc, lo, hi)
 
-        f_total = _clamp(f_traf * f_zona * f_evt * f_seg * f_serv * f_inc,
+        f_total = _clamp(f_traf * f_zona * f_evt * f_seg * f_serv * f_inc * fc,
                          CLAMP_TOTAL[0], CLAMP_TOTAL[1])
         filas.append({"idx": nodo["idx"], "distrito": distrito, "macrozona": macro,
                       "f_trafico": round(f_traf, 4), "f_zona": round(f_zona, 4),
                       "f_evento": round(f_evt, 4), "f_seguridad": round(f_seg, 4),
                       "f_servicio": round(f_serv, 4), "f_incidencia": round(f_inc, 4),
-                      "f_total": round(f_total, 4)})
+                      "f_clima": round(fc, 4), "f_total": round(f_total, 4)})
     return pd.DataFrame(filas)
 
 
@@ -140,13 +168,15 @@ def construir_matriz_contextual(base_min: np.ndarray, nodos: List[dict],
                                 eventos: Optional[Sequence[EventoCalendario]] = None,
                                 incidencias_activas: Optional[Sequence[Incidencia]] = None,
                                 fecha: Optional[str] = None, hora_ref: str = "09:00",
-                                clamp: tuple = CLAMP_FACTOR) -> dict:
+                                clamp: tuple = CLAMP_FACTOR,
+                                seguridad_horaria: Optional[Sequence] = None,
+                                factor_clima: float = 1.0) -> dict:
     """Devuelve {'matriz': ndarray NxN contextual, 'factores': DataFrame, 'formula': str,
     'base': ndarray}. El arco (i, j) se multiplica por el factor total del destino j."""
     base_min = np.asarray(base_min, dtype=float)
     n = base_min.shape[0]
     factores = factores_por_nodo(nodos, zonas, trafico, eventos, incidencias_activas,
-                                 fecha, hora_ref, clamp)
+                                 fecha, hora_ref, clamp, seguridad_horaria, factor_clima)
     f_total = factores.set_index("idx")["f_total"].reindex(range(n)).fillna(1.0).to_numpy()
 
     matriz = base_min * f_total[np.newaxis, :]   # cada columna j escalada por f_total[j]
@@ -156,5 +186,5 @@ def construir_matriz_contextual(base_min: np.ndarray, nodos: List[dict],
         "factores": factores,
         "base": base_min,
         "formula": "T_contextual[i][j] = T_base[i][j] * (F_trafico * F_zona * F_evento "
-                   "* F_seguridad * F_servicio * F_incidencia)[j]",
+                   "* F_seguridad * F_servicio * F_incidencia)[j] * F_clima",
     }
