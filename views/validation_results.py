@@ -13,6 +13,8 @@ from components.buttons import primary, secondary
 from components.filters import render_filters, apply_filters
 from dashboards.kpi_dashboard import render_kpi_dashboard, render_service_time_breakdown
 from dashboards.scenario_comparison import render_scenario_comparison
+from components.cards import kpi_row
+from utils.formatters import fmt_pct, fmt_int, fmt_minutes
 from dashboards.service_evolution import render_service_evolution
 from dashboards.vehicle_performance import render_vehicle_performance
 from dashboards.variability_analysis import render_variability_analysis
@@ -85,45 +87,97 @@ def render():
     evolucion_filtrada = compute_otd_evolution(entregas_filtradas)
     service_metrics = compute_service_time_metrics(entregas_filtradas)
 
-    tabs = st.tabs([
-        "1. Indicadores",
-        "2. Comparacion de escenarios",
-        "3. Evolucion del servicio",
-        "4. Desempeno por vehiculo",
-        "5. Variabilidad",
-        "6. Detalle operativo",
-    ])
+    # Escenario activo (caption comun a la narrativa).
+    if esc_sel == "Todos" and esc_target:
+        st.caption(f"Escenario representativo: **{label_escenario(esc_target)}** "
+                   f"(usa el filtro Escenario para ver otro).")
+    elif esc_target:
+        st.caption(f"Escenario activo: **{label_escenario(esc_target)}**")
 
-    with tabs[0]:
-        if esc_sel == "Todos" and esc_target:
-            st.caption(f"Escenario representativo: **{label_escenario(esc_target)}**  "
-                       f"(usa el filtro Escenario para ver otro).")
-        elif esc_target:
-            st.caption(f"Escenario activo: **{label_escenario(esc_target)}**")
-        replan = compute_replanning_stats(sub.get("decisiones", []))
-        render_kpi_dashboard(kpis_filtrados, replan, service_metrics=service_metrics)
+    replan = compute_replanning_stats(sub.get("decisiones", []))
+    _sigma = sub.get("otd_std_iter")
+
+    # Resultados como NARRATIVA de 5 capitulos (mismo guion que el gemelo) + la comparacion de
+    # escenarios propia de validacion.
+    t1, t2, t3, t4, t5, tcomp = st.tabs([
+        "1 · Resultado", "2 · Detalle", "3 · Robustez", "4 · Reaccion", "5 · Costo",
+        "Comparacion de escenarios"])
+
+    # Cap 1 - El resultado: ¿cumplimos la promesa?
+    with t1:
+        st.caption("**¿Cumplimos la promesa?**")
+        kpi_row([
+            {"label": "OTD", "value": fmt_pct(kpis_filtrados.get("otd")),
+             "helptext": "Entregas a tiempo / entregas completadas"},
+            {"label": "OTIF", "value": fmt_pct(kpis_filtrados.get("otif")),
+             "helptext": "A tiempo sobre el total de pedidos"},
+            {"label": "Éxito 1er intento",
+             "value": fmt_pct(kpis_filtrados.get("exito_primer_intento")),
+             "helptext": "Entregas logradas sin reintento (ausencia)"},
+        ])
+
+    # Cap 2 - El detalle: ¿que tan bien y donde fallo?
+    with t2:
+        st.caption("**¿Qué tan bien y dónde falló?**")
+        kpi_row([
+            {"label": "A tiempo", "value": fmt_int(kpis_filtrados.get("entregas_a_tiempo"))},
+            {"label": "Fuera de ventana", "value": fmt_int(kpis_filtrados.get("entregas_fuera_ventana"))},
+            {"label": "Fallidas", "value": fmt_int(kpis_filtrados.get("entregas_fallidas"))},
+            {"label": "Retraso prom.", "value": fmt_minutes(kpis_filtrados.get("retraso_promedio_min"))},
+            {"label": "Retraso máx.", "value": fmt_minutes(kpis_filtrados.get("retraso_maximo_min"))},
+        ])
+        st.write("")
+        render_service_evolution(evolucion_filtrada, entregas_filtradas)
+        st.write("")
+        render_vehicle_performance(entregas_filtradas, dataset.get("vehiculos"))
+
+    # Cap 3 - La robustez (CLIMAX): ¿y en los peores dias?
+    with t3:
+        st.caption("**¿Y en los peores días?** Un plan robusto se mide por su cola, no por su "
+                   "promedio.")
+        kpi_row([
+            {"label": "CVaR tardanza ★", "value": fmt_minutes(sub.get("cvar_tardanza_min")),
+             "helptext": "Tardanza total en el PEOR 10% de días (riesgo de cola)"},
+            {"label": "Pedidos en riesgo", "value": fmt_int(sub.get("pedidos_en_riesgo")),
+             "helptext": "Pedidos con alto IRI (probabilidad de incumplir su ventana)"},
+            {"label": "Variabilidad OTD ★",
+             "value": (f"±{float(_sigma):.1f} pts" if _sigma is not None else "-"),
+             "helptext": "Desv. estándar del OTD entre iteraciones (menor = más consistente)"},
+        ])
+        st.write("")
+        render_variability_analysis(entregas_filtradas, res.get("iteraciones"), kpis_filtrados)
+
+    # Cap 4 - La reaccion: ¿como respondio al caos?
+    with t4:
+        st.caption("**¿Cómo respondió al caos?** Alertas y re-ruteo.")
+        kpi_row([
+            {"label": "Alertas", "value": fmt_int(kpis_filtrados.get("alertas_generadas"))},
+            {"label": "Replanificadas", "value": fmt_int(kpis_filtrados.get("entregas_replanificadas"))},
+            {"label": "Re-ruteos sugeridos", "value": fmt_int(replan.get("sugeridas", 0))},
+            {"label": "Aprobados", "value": fmt_int(replan.get("aprobadas", 0))},
+            {"label": "Pedidos recuperados", "value": fmt_int(replan.get("pedidos_recuperados", 0))},
+        ])
+
+    # Cap 5 - El costo: ¿a que precio?
+    with t5:
+        st.caption("**¿A qué precio?** El tiempo operativo del plan.")
+        kpi_row([
+            {"label": "Tiempo total op.",
+             "value": fmt_minutes(kpis_filtrados.get("tiempo_total_operacion_min"))},
+            {"label": "Tiempo prom. entrega",
+             "value": fmt_minutes(kpis_filtrados.get("tiempo_promedio_entrega_min"))},
+            {"label": "Tiempo prom. parada",
+             "value": fmt_minutes(kpis_filtrados.get("tiempo_promedio_parada_min"))},
+        ])
         st.write("")
         render_service_time_breakdown(service_metrics)
 
-    with tabs[1]:
-        # Comparacion entre escenarios usa las iteraciones agregadas (no se filtra)
-        render_scenario_comparison(
-            res.get("kpis_por_escenario"),
-            res.get("iteraciones"),
-            res.get("resumen"),
-        )
+    # Extra propio de validacion: comparacion entre escenarios (agregada, no se filtra).
+    with tcomp:
+        render_scenario_comparison(res.get("kpis_por_escenario"), res.get("iteraciones"),
+                                   res.get("resumen"))
 
-    with tabs[2]:
-        render_service_evolution(evolucion_filtrada, entregas_filtradas)
-
-    with tabs[3]:
-        render_vehicle_performance(entregas_filtradas, dataset.get("vehiculos"))
-
-    with tabs[4]:
-        render_variability_analysis(entregas_filtradas, res.get("iteraciones"),
-                                    kpis_filtrados)
-
-    with tabs[5]:
+    with st.expander("Detalle operativo (tabla de entregas)"):
         if entregas_filtradas is None or entregas_filtradas.empty:
             st.info("No hay entregas que coincidan con los filtros aplicados.")
         else:

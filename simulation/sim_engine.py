@@ -16,8 +16,10 @@ import math
 import random
 import numpy as np
 import pandas as pd
+from collections import defaultdict
 
 from config.settings import ALMACEN
+from core.risk_engine import cvar as _cvar, UMBRAL_RIESGO   # formulas canonicas (unicas)
 from optimization.route_optimizer import (
     Ruta, construir_rutas_iniciales, _dist_km,
 )
@@ -403,7 +405,37 @@ def simular_escenarios(dataset: dict, configuracion: dict,
     pedidos = dataset["pedidos"]
     vehiculos = dataset["vehiculos"]
 
-    rutas_optimizadas = construir_rutas_iniciales(pedidos, vehiculos, velocidad_kmh=velocidad)
+    # Motor UNIFICADO: la validacion construye rutas con CORTEX-LM (mismo motor y contexto que el
+    # demo). El contexto (plantillas + APIs) se arma UNA vez; se cachea una variante por nivel de
+    # buffer. Con respaldo DEFENSIVO al motor v1 si el contexto/plan fallara (sin plantillas/OSRM).
+    # ROBUSTEZ POR BUFFER: 'solo_ruta' = buffer normal (α≈0.90); 'dss_completo' = buffer ALTO
+    # (α≈0.98, cv mayor) => mas holgura => protege la cola bajo estres. Mismo motor, una perilla.
+    usar_cortex = bool(configuracion.get("usar_motor_cortex", True))
+    NIVEL_NORMAL, CV_NORMAL = 0.90, 0.25
+    NIVEL_ALTO, CV_ALTO = float(configuracion.get("nivel_robusto", 0.98)), \
+        float(configuracion.get("cv_robusto", 0.50))
+    ctx_cortex = None
+    if usar_cortex:
+        try:
+            from services.cortex_routing import construir_contexto, rutas_cortex
+            ctx_cortex = construir_contexto(dataset)
+        except Exception:
+            ctx_cortex = None
+    _rutas_cache: Dict[bool, Dict[str, Ruta]] = {}
+
+    def _rutas_dss(buffer_alto: bool) -> Dict[str, Ruta]:
+        if buffer_alto not in _rutas_cache:
+            r: Dict[str, Ruta] = {}
+            if ctx_cortex is not None:
+                try:
+                    nivel, cv = (NIVEL_ALTO, CV_ALTO) if buffer_alto else (NIVEL_NORMAL, CV_NORMAL)
+                    r = rutas_cortex(ctx_cortex, robusto=False, nivel_servicio=nivel, cv_tiempo=cv)
+                except Exception:
+                    r = {}
+            if not r:   # respaldo defensivo: motor v1 si CORTEX-LM no entrego rutas
+                r = construir_rutas_iniciales(pedidos, vehiculos, velocidad_kmh=velocidad)
+            _rutas_cache[buffer_alto] = r
+        return _rutas_cache[buffer_alto]
 
     def _notify(esc, it, total, status):
         if progress_callback is not None:
@@ -416,13 +448,18 @@ def simular_escenarios(dataset: dict, configuracion: dict,
     resultados_finales = {}
     for esc in escenarios:
         replanifica = (esc == "dss_completo")
-        usa_optimizacion = (esc != "sin_dss")
-        rutas_base = rutas_optimizadas if usa_optimizacion else \
-            _rutas_baseline_sin_dss(pedidos, vehiculos)
+        if esc == "sin_dss":
+            rutas_base = _rutas_baseline_sin_dss(pedidos, vehiculos)
+        else:
+            # solo_ruta = buffer normal ; dss_completo = buffer ALTO (robustez por holgura) + replan
+            rutas_base = _rutas_dss(buffer_alto=(esc == "dss_completo"))
 
         _notify(esc, 0, iteraciones, "start")
 
         agregados_otd = []
+        tard_total_iter = []                 # tardanza TOTAL por iteracion -> CVaR (cola)
+        late_por_pedido = defaultdict(int)   # nº de iteraciones en que cada pedido llego tarde -> IRI
+        n_iters = 0
         ultimo = None
         for it in range(iteraciones):
             res = simular_jornada(
@@ -437,12 +474,27 @@ def simular_escenarios(dataset: dict, configuracion: dict,
                 **kpis,
             })
             agregados_otd.append(kpis.get("otd", 0))
+            ent = res.get("entregas")
+            if ent is not None and not ent.empty and "retraso_min" in ent.columns:
+                tard_total_iter.append(float(ent["retraso_min"].fillna(0).sum()))
+                for pid, r in ent.groupby("pedido_id")["retraso_min"].max().items():
+                    if float(r) > 0:
+                        late_por_pedido[pid] += 1
+            n_iters += 1
             ultimo = res
             _notify(esc, it + 1, iteraciones, "progress")
 
         resultados_finales[esc] = ultimo
         resultados_finales[esc]["otd_promedio_iter"] = float(np.mean(agregados_otd)) if agregados_otd else 0.0
         resultados_finales[esc]["otd_std_iter"] = float(np.std(agregados_otd)) if agregados_otd else 0.0
+        # Riesgo (mismas formulas que el gemelo/motor, de core.risk_engine): CVaR de tardanza (peor
+        # 10% de dias) e IRI por pedido -> pedidos en riesgo. Se inyectan en los KPIs del escenario.
+        cvar_tard = round(float(_cvar(tard_total_iter, 0.9)), 1) if tard_total_iter else 0.0
+        en_riesgo = int(sum(1 for c in late_por_pedido.values() if c / max(1, n_iters) > UMBRAL_RIESGO))
+        ultimo["kpis"]["cvar_tardanza_min"] = cvar_tard
+        ultimo["kpis"]["pedidos_en_riesgo"] = en_riesgo
+        ultimo["cvar_tardanza_min"] = cvar_tard
+        ultimo["pedidos_en_riesgo"] = en_riesgo
         _notify(esc, iteraciones, iteraciones, "done")
 
     return {

@@ -47,6 +47,7 @@ def test_simular_escenarios_invoca_callback_con_start_progress_done(dataset_min)
     cfg = {
         "escenarios_activos": ["sin_dss", "dss_completo"],
         "semilla": 1, "factor_incidencias": 0.0,
+        "usar_motor_cortex": False,   # ruta rapida (v1): este test valida el CALLBACK, no el motor
     }
     simular_escenarios(dataset_min, cfg, iteraciones=2, progress_callback=cb)
 

@@ -22,7 +22,7 @@ from typing import List, Optional, Tuple
 import pandas as pd
 
 from config.cortex_settings import FACTOR_CIRCUITO
-from core.risk_engine import UMBRAL_RIESGO, clasificar_iri
+from core.risk_engine import UMBRAL_RIESGO, clasificar_iri, cvar as _cvar
 from core.uncertainty import (TIPOS_INCIDENCIA, descripcion_incidencia, franja_de_minuto,
                              incidencias_de_nodo, prob_ausencia)
 
@@ -438,20 +438,25 @@ def variabilidad_operacion(escenario_base: dict, *, tasa: float = 0.12,
 
     Devuelve media, desviacion estandar y CV del OTD sobre las N corridas.
     """
-    otds = []
+    otds, tards = [], []
     for s in range(int(n_corridas)):
         esc_s, _ = simular_incidencias(escenario_base, tasa=tasa, seed=seed + s,
                                        mult_retraso=mult_retraso, incidencias=incidencias,
                                        zonas=zonas)
         otds.append(resumen_operacion(esc_s)["otd"])
+        tards.append(sum(float(p.get("tardanza_min", 0.0))       # tardanza TOTAL de la corrida
+                         for paradas in esc_s["rutas"].values() for p in paradas))
     if not otds:
-        return {"otd_medio": 0.0, "otd_std": 0.0, "cv": 0.0, "n": 0, "muestras": []}
+        return {"otd_medio": 0.0, "otd_std": 0.0, "cv": 0.0, "cvar_tardanza_min": 0.0,
+                "n": 0, "muestras": []}
     media = sum(otds) / len(otds)
     var = sum((x - media) ** 2 for x in otds) / len(otds)
     std = var ** 0.5
+    # CVaR de tardanza (peor 10% de corridas): misma formula que el motor DRO y validacion.
+    cvar_tard = round(float(_cvar(tards, 0.9)), 1) if tards else 0.0
     return {"otd_medio": round(media, 4), "otd_std": round(std, 4),
             "cv": round(std / media, 4) if media > 0 else 0.0,
-            "n": len(otds), "muestras": otds}
+            "cvar_tardanza_min": cvar_tard, "n": len(otds), "muestras": otds}
 
 
 # --------------------------------------------------------------------------- helpers
@@ -530,6 +535,33 @@ def _moore_orden(pend: list, t0: float, pos0) -> list:
 
 def _tardanza_total(paradas: list) -> float:
     return sum(float(p.get("tardanza_min", 0.0)) for p in paradas)
+
+
+def reordenar_pendientes(pend: list, t0: float, pos0, *, permitir_nn: bool = True):
+    """Nucleo de re-secuenciacion COMPARTIDO por el gemelo y la validacion (mismo replanificador).
+
+    Compara el orden ACTUAL de los pendientes contra EDD, Moore-Hodgson y (opcional) vecino-mas-
+    cercano, y devuelve el mejor por (nº de tardias, tardanza total) SIN empeorar el orden actual.
+
+    `pend`: lista de paradas dict con coord=(lat,lon), ventana_fin_min, servicio_min[, incidencia_min].
+    Devuelve (orden, mejora): `orden` es la lista reordenada (el actual si nada mejora); `mejora`
+    indica si el elegido supera estrictamente al orden actual."""
+    if len(pend) < 2:
+        return list(pend), False
+    base = copy.deepcopy(pend)
+    _recomputar(base, t0, pos0)
+    base_win = (_n_tarde(base), round(_tardanza_total(base), 1))
+    candidatos = [sorted(copy.deepcopy(pend), key=lambda x: float(x["ventana_fin_min"])),
+                  _moore_orden(copy.deepcopy(pend), t0, pos0)]
+    if permitir_nn:
+        candidatos.append(_nn_orden(copy.deepcopy(pend), pos0))
+    mejor, mejor_win = list(base), base_win
+    for orden in candidatos:
+        _recomputar(orden, t0, pos0)
+        win = (_n_tarde(orden), round(_tardanza_total(orden), 1))
+        if win < mejor_win:                       # solo si MEJORA (guardia de no-empeorar)
+            mejor, mejor_win = list(orden), win
+    return mejor, (mejor_win < base_win)
 
 
 def _fin_ruta_min(paradas: list, escenario: dict) -> float:

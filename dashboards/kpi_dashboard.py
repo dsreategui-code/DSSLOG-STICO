@@ -17,13 +17,15 @@ def _fmt_cv(value) -> str:
 
 
 def render_kpi_dashboard(kpis: dict, replan_stats: dict = None,
-                         service_metrics: dict = None):
+                         service_metrics: dict = None, robustez: dict = None):
     """Renderiza filas de KPIs principales, secundarios y de tiempo de servicio.
 
     Args:
         kpis: dict producido por simulation.metrics.compute_kpis.
         replan_stats: dict producido por compute_replanning_stats (opcional).
         service_metrics: dict producido por compute_service_time_metrics (opcional).
+        robustez: dict con la robustez AGREGADA entre iteraciones (cvar_tardanza_min,
+                  pedidos_en_riesgo, otd_std_iter). Se muestra como fila destacada (opcional).
     """
     if not kpis:
         st.info("Aun no hay indicadores calculados con los filtros actuales.")
@@ -41,6 +43,21 @@ def render_kpi_dashboard(kpis: dict, replan_stats: dict = None,
     ]
     kpi_row(fila_1)
     st.write("")
+
+    # Robustez / riesgo (agregado entre iteraciones): el "capitulo climax" de la narrativa.
+    if robustez:
+        st.markdown("**Robustez / riesgo** (entre iteraciones)")
+        _sigma = robustez.get("otd_std_iter")
+        kpi_row([
+            {"label": "CVaR tardanza", "value": fmt_minutes(robustez.get("cvar_tardanza_min")),
+             "helptext": "Tardanza total en el PEOR 10% de dias (riesgo de cola)"},
+            {"label": "Pedidos en riesgo", "value": fmt_int(robustez.get("pedidos_en_riesgo")),
+             "helptext": "Pedidos con alta probabilidad de incumplir su ventana (IRI > 0.6)"},
+            {"label": "Variabilidad OTD",
+             "value": (f"±{float(_sigma):.1f} pts" if _sigma is not None else "-"),
+             "helptext": "Desv. estandar del OTD entre iteraciones (menor = mas consistente)"},
+        ])
+        st.write("")
 
     fila_2 = [
         {"label": "Tiempo total op.", "value": fmt_minutes(kpis.get("tiempo_total_operacion_min"))},

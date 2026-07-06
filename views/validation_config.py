@@ -21,6 +21,14 @@ from config.settings import RANDOM_SEED
 _VELOCIDAD_KMH_FIJA = 18.0
 _MOTOR_OPTIMIZACION = "auto"   # OR-Tools con respaldo greedy interno
 
+# Condicion de la jornada -> intensidad del estres (factor_incidencias, factor_trafico). La robustez
+# (buffer del DSS completo) y la replanificacion solo lucen su valor bajo estres.
+_CONDICIONES = {
+    "Normal": (1.0, 1.0),
+    "Dificil": (2.5, 1.2),
+    "Critico": (4.0, 1.4),
+}
+
 
 def render():
     render_view_title(
@@ -45,6 +53,15 @@ def render():
             int(cfg_prev.get("umbral_riesgo_min", 15)), 1,
             help="Cuando el retraso proyectado de los pedidos pendientes excede este "
                  "umbral, el motor evalua una replanificacion intravehiculo.",
+        )
+        _cond_opts = list(_CONDICIONES.keys())
+        condicion = st.selectbox(
+            "Condicion de la jornada",
+            options=_cond_opts,
+            index=_cond_opts.index(cfg_prev.get("condicion_jornada", "Dificil"))
+            if cfg_prev.get("condicion_jornada", "Dificil") in _cond_opts else 1,
+            help="Intensidad del estres (incidencias y trafico). La robustez del DSS completo y la "
+                 "replanificacion demuestran su valor bajo dias Dificil/Critico, no en un dia Normal.",
         )
     with col_r:
         semilla = st.number_input(
@@ -81,12 +98,16 @@ def render():
         if primary("Simulacion", key="val_cfg_next",
                    use_container_width=True,
                    disabled=not escenarios):
+            _fi, _ft = _CONDICIONES.get(condicion, (1.0, 1.0))
             cfg = {
                 "modo": "validacion",
                 "iteraciones": int(iteraciones),
                 "umbral_riesgo_min": int(umbral),
                 "semilla": int(semilla),
                 "escenarios_activos": escenarios,
+                "condicion_jornada": condicion,
+                "factor_incidencias": _fi,
+                "factor_trafico": _ft,
                 # Parametros internos no expuestos
                 "velocidad_kmh": _VELOCIDAD_KMH_FIJA,
                 "motor_optimizacion": _MOTOR_OPTIMIZACION,

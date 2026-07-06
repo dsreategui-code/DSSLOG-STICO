@@ -201,6 +201,7 @@ def evaluar_replanificacion(ruta_actual: Ruta, pedidos: pd.DataFrame,
         ruta_actual, pedidos, pedidos_pendientes,
         velocidad_kmh=velocidad_kmh,
         pos_actual_lat=pos_lat, pos_actual_lon=pos_lon,
+        t_actual_min=hora_actual_min,      # activa el nucleo compartido (Moore-Hodgson del gemelo)
     )
 
     otd_act, _, t_act = _otd_proyectado(

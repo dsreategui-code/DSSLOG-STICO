@@ -48,6 +48,15 @@ def evaluar_robusto(resultado: dict, modelo, pedidos: Sequence, incidencias: Seq
     incid_prob, incid_delay, ausencia = probabilidades_por_nodo(pedidos, incidencias, zonas)
     distancia = _distancia(resultado)
     cobertura = _cobertura(resultado, modelo)
+    # Tardanza del PLAN en un dia perfecto (sin incertidumbre): un plan que ya llega tarde con
+    # todo en orden es intrinsecamente peor.
+    tardanza_plan = round(sum(rc.tardanza_total_min
+                              for rc in resultado.get("rutas", {}).values()), 2)
+    # Pedidos NO servidos (descartados por el optimizador): abandonar un cliente es un fallo que
+    # la seleccion debe penalizar, no premiar.
+    n_clientes = max(0, len(getattr(modelo, "pedido_ids", [])) - 1)   # nodo 0 = HUB
+    servidos_ct = sum(rc.n_paradas for rc in resultado.get("rutas", {}).values())
+    n_no_servidos = max(0, n_clientes - servidos_ct)
 
     por_config = {}
     for cfg in ambiguedad:
@@ -89,6 +98,8 @@ def evaluar_robusto(resultado: dict, modelo, pedidos: Sequence, incidencias: Seq
         "perfil": resultado.get("perfil"),
         "cobertura": cobertura,
         "distancia_km": distancia,
+        "tardanza_plan_min": tardanza_plan,      # tardanza en dia perfecto (nominal del plan)
+        "n_no_servidos": n_no_servidos,          # clientes abandonados (penalizados en la seleccion)
         "score_robusto": peor["score"],          # DRO: peor caso ajustado por riesgo (menor=mejor)
         "config_peor_caso": peor_nombre,
         "otd_nominal": nominal["otd"],
@@ -116,14 +127,31 @@ def evaluar_robusto(resultado: dict, modelo, pedidos: Sequence, incidencias: Seq
     }
 
 
-def recomendar_robusto(evaluaciones: Sequence[dict]) -> dict:
-    """Elige la candidata de MENOR score robusto (peor caso ajustado por riesgo) entre las de
-    cobertura completa; si ninguna cubre todo, prioriza cobertura. Explica el porque."""
+def recomendar_robusto(evaluaciones: Sequence[dict], *, penal_no_servido: float = 90.0) -> dict:
+    """Selecciona la MEJOR candidata entre TODAS (OR-Tools + ALNS) con un objetivo UNIFICADO,
+    consciente de riesgo Y de cobertura:
+
+        score_total = score_robusto  +  penal_no_servido * (pedidos NO servidos)
+
+    Antes la seleccion filtraba por COBERTURA ABSOLUTA (y elegia el plan de cobertura total de menor
+    riesgo), lo que la forzaba a planes ALNS de cobertura total pero FRAGILES. Ahora OR-Tools y ALNS
+    compiten en la MISMA cancha:
+      - `score_robusto` = peor caso ajustado por riesgo (E[tardanza]+β·CVaR sobre el peor config).
+        Ya penaliza los planes que llegan tarde (incluido "tarde en dia perfecto") => la robustez se
+        extrae donde de verdad reduce el riesgo, no fabricando tardanza.
+      - `penal_no_servido` cuenta cada cliente ABANDONADO como un fallo (no una ventaja): sin esto la
+        seleccion premiaba descartar los pedidos dificiles.
+    Si servir todo (ALNS) reduce el riesgo total, gana; si un plan mas limpio que descarta 1-2
+    dificiles (OR-Tools) es menos arriesgado en conjunto, gana ese. Resultado: robusto dominante-o-
+    igual al determinista, y mejor bajo estres cuando el plan esta apretado (que es donde la
+    robustez tiene trabajo)."""
     if not evaluaciones:
         return {"recomendada": None, "ranking": [], "explicacion": "Sin candidatas viables."}
-    cob_max = max(e["cobertura"] for e in evaluaciones)
-    elegibles = [e for e in evaluaciones if e["cobertura"] >= cob_max - 1e-9]
-    ranking = sorted(elegibles, key=lambda e: e["score_robusto"])
+
+    def score_total(e):
+        return e["score_robusto"] + penal_no_servido * e.get("n_no_servidos", 0)
+
+    ranking = sorted(evaluaciones, key=score_total)
     mejor = ranking[0]
     exp = _explicar_robusto(mejor, ranking)
     return {"recomendada": mejor["perfil"], "ranking": ranking, "explicacion": exp,

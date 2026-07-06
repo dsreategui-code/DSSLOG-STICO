@@ -130,8 +130,9 @@ def _paso_params():
     ctx = _ctx()
     par = ctx["parametros"]
     n_total = len(ctx["pedidos"])
-    st.caption("Parametros operativos de la jornada. El motor aplica ALNS y evaluacion robusta "
-               "(DRO) de forma intrinseca; incorpora los **tiempos de servicio** por tipo de "
+    st.caption("Parametros operativos de la jornada. La **robustez** se controla con el colchon de "
+               "seguridad (α, abajo); el motor aplica ALNS y un analisis DRO de candidatas "
+               "(avanzado); incorpora los **tiempos de servicio** por tipo de "
                "pedido; y respeta **restricciones operativas reales**: jornada maxima del "
                f"conductor ({int(par.jornada_max_min)//60} h), **descanso/almuerzo** de "
                f"{int(par.descanso_min)} min al mediodia, y **cuadrillas** (los pedidos de "
@@ -144,9 +145,12 @@ def _paso_params():
     fechas = ["(sin evento)"] + sorted({e.fecha for e in ctx["eventos"]})
     fecha = c2.selectbox("Fecha (calendario de eventos)", fechas, key="df_fecha",
                          help="Los eventos (campanas, feriados) ajustan el trafico esperado.")
-    nivel = c3.slider("Nivel de servicio objetivo (α)", 0.80, 0.975, float(par.nivel_servicio),
-                      0.005, key="df_alpha", help="Chance-constraint de las ventanas: mayor α = "
-                      "mas colchon de tiempo para cumplir la promesa de entrega.")
+    nivel = c3.slider("Robustez · colchon de seguridad (α)", 0.80, 0.98, float(par.nivel_servicio),
+                      0.005, key="df_alpha", help="La PALANCA de robustez: el plan optimiza contra "
+                      "'ventana − buffer' (buffer ∝ α). Mayor α = mas colchon = mas robusto ante el "
+                      "estres (protege la cola de dias malos), a costa de algo de eficiencia; menor α "
+                      "= 'justo a tiempo'. Es la misma perilla que separa 'DSS parcial' de 'DSS "
+                      "completo' en la validacion.")
     with st.expander("Opciones avanzadas (modelado de incertidumbre)"):
         ca, cb = st.columns(2)
         cv = ca.slider("CV del tiempo de viaje", 0.10, 0.45, float(par.cv_tiempo), 0.01,
@@ -380,45 +384,74 @@ def _paso_motor():
 
 # ------------------------------------------------------------------ Paso 4: Gemelo
 def _resultados(esc_ini, esc_inc, esc_fin, incidencias, tasa, mult):
+    """Resultados del gemelo como NARRATIVA de 5 capitulos: Resultado -> Detalle -> Robustez
+    (climax) -> Reaccion -> Costo. Mismas metricas nucleo que el modo Validacion."""
     r_inc = resumen_operacion(esc_inc, incidencias)
     r_fin = resumen_operacion(esc_fin, incidencias)
     ctx = st.session_state.df_ctx
     var = variabilidad_operacion(esc_ini, tasa=tasa, mult_retraso=mult, n_corridas=25, seed=0,
                                  incidencias=ctx["incidencias"], zonas=ctx["zonas"])
-    tab_g, tab_c, tab_i, tab_cmp = st.tabs(
-        ["Generales", "Por camion", "Incidencias", "Inicial vs final"])
+    tc = tabla_por_camion(esc_fin)
+    op_fin = tabla_operacion(esc_fin)
+    n_ped = max(1, int(r_fin["pedidos"]))
+    tard_total = sum(float(p.get("tardanza_min", 0.0))
+                     for paradas in esc_fin["rutas"].values() for p in paradas)
 
-    with tab_g:
+    t1, t2, t3, t4, t5 = st.tabs(
+        ["1 · Resultado", "2 · Detalle", "3 · Robustez", "4 · Reaccion", "5 · Costo"])
+
+    # Cap 1 - El resultado: ¿cumplimos la promesa?
+    with t1:
         d = (r_fin["otd"] - r_inc["otd"]) * 100
+        st.caption(f"**¿Cumplimos la promesa?** {r_fin['pedidos']} entregas · "
+                   f"{r_fin['otd'] * 100:.0f}% a tiempo tras el re-ruteo.")
         kpi_row([
-            {"label": "OTD (con re-ruteo)", "value": f"{r_fin['otd'] * 100:.1f}%",
+            {"label": "OTD", "value": f"{r_fin['otd'] * 100:.1f}%",
              "delta": f"{d:+.1f} pts vs base" if abs(d) > 1e-9 else None,
              "delta_dir": "up" if d > 1e-9 else "flat",
-             "helptext": "Entregas dentro de ventana tras el re-ruteo recomendado"},
+             "helptext": "Entregas dentro de ventana (con re-ruteo)"},
             {"label": "OTIF", "value": f"{r_fin['otif'] * 100:.1f}%",
              "helptext": "A tiempo Y completo (primer intento)"},
-            {"label": "Variabilidad", "value": f"±{var['otd_std'] * 100:.1f} pts",
-             "helptext": f"σ del OTD en {var['n']} corridas con incidencias"},
+            {"label": "Pedidos", "value": str(r_fin["pedidos"])},
+        ])
+        st.plotly_chart(fig_estado_final(op_fin), use_container_width=True, config=PLOT_CFG)
+
+    # Cap 2 - El detalle: ¿que tan bien y donde fallo?
+    with t2:
+        st.caption("**¿Qué tan bien y dónde falló?**")
+        kpi_row([
+            {"label": "Éxito 1er intento",
+             "value": f"{(1 - r_fin['fallidas_primer_intento'] / n_ped) * 100:.1f}%",
+             "helptext": "Entregas logradas sin reintento (ausencia)"},
             {"label": "Fuera de ventana", "value": str(r_fin["fuera_ventana"])},
-            {"label": "Fallidas 1er intento", "value": str(r_fin["fallidas_primer_intento"])},
+            {"label": "Tardanza máx.", "value": f"{r_fin['tardanza_max_min']:.0f} min"},
+            {"label": "Tardanza prom.", "value": f"{r_fin['tardanza_prom_min']:.0f} min"},
         ])
         g1, g2 = st.columns(2, gap="large")
         with g1:
-            st.plotly_chart(fig_entregas_por_hora(tabla_operacion(esc_fin)),
-                            use_container_width=True, config=PLOT_CFG)
+            st.plotly_chart(fig_entregas_por_hora(op_fin), use_container_width=True, config=PLOT_CFG)
         with g2:
-            st.plotly_chart(fig_estado_final(tabla_operacion(esc_fin)),
-                            use_container_width=True, config=PLOT_CFG)
-        st.plotly_chart(fig_variabilidad(var), use_container_width=True, config=PLOT_CFG)
-
-    with tab_c:
-        tc = tabla_por_camion(esc_fin)
-        st.plotly_chart(fig_otd_otif_camion(tc), use_container_width=True, config=PLOT_CFG)
-        st.plotly_chart(fig_tardanza_por_vehiculo(tabla_operacion(esc_fin)),
-                        use_container_width=True, config=PLOT_CFG)
+            st.plotly_chart(fig_otd_otif_camion(tc), use_container_width=True, config=PLOT_CFG)
+        st.plotly_chart(fig_tardanza_por_vehiculo(op_fin), use_container_width=True, config=PLOT_CFG)
         st.dataframe(tc, use_container_width=True, hide_index=True)
 
-    with tab_i:
+    # Cap 3 - La robustez (CLIMAX): ¿y en los peores dias?
+    with t3:
+        st.caption("**¿Y en los peores días?** Un plan robusto se mide por su cola, no por su "
+                   "promedio.")
+        kpi_row([
+            {"label": "CVaR tardanza ★", "value": f"{var.get('cvar_tardanza_min', 0):.0f} min",
+             "helptext": "Tardanza total en el PEOR 10% de días (riesgo de cola)"},
+            {"label": "Variabilidad OTD ★", "value": f"±{var['otd_std'] * 100:.1f} pts",
+             "helptext": f"σ del OTD en {var['n']} corridas (menor = más consistente)"},
+            {"label": "Pedidos en riesgo", "value": str(r_fin["en_riesgo"]),
+             "helptext": "Pedidos con alto IRI (probabilidad de incumplir su ventana)"},
+        ])
+        st.plotly_chart(fig_variabilidad(var), use_container_width=True, config=PLOT_CFG)
+
+    # Cap 4 - La reaccion: ¿como respondio al caos?
+    with t4:
+        st.caption("**¿Cómo respondió al caos?** Incidencias del día y re-ruteo recomendado.")
         ag = agregados_incidencias(incidencias)
         ki1, ki2, ki3 = st.columns(3)
         ki1.metric("Incidencias", ag["n"])
@@ -437,14 +470,12 @@ def _resultados(esc_ini, esc_inc, esc_fin, incidencias, tasa, mult):
         else:
             st.caption("Sin incidencias en esta jornada.")
 
-    with tab_cmp:
+        st.markdown("**Re-ruteo: ruta inicial vs final**")
         cmp = comparar_rutas(esc_inc, esc_fin)
-        tc = tabla_por_camion(esc_fin)
         n_cambio = int(cmp["cambiada"].sum())
         rec = int(cmp["delta_a_tiempo"].clip(lower=0).sum())
-        st.caption(f"{n_cambio} de {len(cmp)} camiones re-secuenciados por el re-ruteo "
-                   f"recomendado · +{rec} entregas a tiempo recuperadas.")
-
+        st.caption(f"{n_cambio} de {len(cmp)} camiones re-secuenciados · +{rec} entregas a tiempo "
+                   f"recuperadas.")
         cambiados = cmp[cmp["cambiada"]]["vehiculo_id"].tolist()
         opciones = (["Solo camiones cambiados"] if cambiados else []) + list(esc_fin["rutas"].keys())
         sel = st.selectbox("Ver en el mapa", opciones, key="df_cmpveh")
@@ -453,15 +484,21 @@ def _resultados(esc_ini, esc_inc, esc_fin, incidencias, tasa, mult):
             _enriquecer_geometrias(esc_inc)
             _enriquecer_geometrias(esc_fin)
             _mapa_ini_fin(esc_inc, esc_fin, vehs)
-
         vista = cmp[cmp["vehiculo_id"].isin(vehs)] if sel != "Solo camiones cambiados" or cambiados else cmp
-        st.markdown("**Comparacion de secuencias**")
         st.dataframe(vista[["vehiculo_id", "cambiada", "orden_inicial", "orden_final",
                             "delta_a_tiempo", "delta_tardanza_min"]],
                      use_container_width=True, hide_index=True)
-        st.markdown("**Resumen del/los camion(es)**")
-        st.dataframe(tc[tc["vehiculo_id"].isin(vehs)] if vehs else tc,
-                     use_container_width=True, hide_index=True)
+
+    # Cap 5 - El costo: ¿a que precio?
+    with t5:
+        st.caption("**¿A qué precio?** El costo operativo del plan.")
+        dist_total = float(tc["distancia_km"].sum()) if not tc.empty else 0.0
+        kpi_row([
+            {"label": "Distancia total", "value": f"{dist_total:.0f} km"},
+            {"label": "Vehículos usados", "value": str(len(esc_fin["rutas"]))},
+            {"label": "Tardanza acumulada", "value": f"{tard_total:.0f} min"},
+        ])
+        st.dataframe(tc, use_container_width=True, hide_index=True)
 
 
 def _paso_gemelo():

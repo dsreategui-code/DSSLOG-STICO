@@ -208,11 +208,16 @@ def reordenar_intravehiculo(ruta: Ruta, pedidos: pd.DataFrame,
                             pedidos_pendientes: List[str],
                             velocidad_kmh: float = 18.0,
                             pos_actual_lat: float = None,
-                            pos_actual_lon: float = None) -> Ruta:
+                            pos_actual_lon: float = None,
+                            t_actual_min: float = None) -> Ruta:
     """Reordena solo los pedidos pendientes del mismo vehiculo (regla intravehiculo).
 
     Los pedidos ya entregados o en curso se mantienen al inicio en su orden original.
-    """
+
+    Si se entrega `t_actual_min` (hora actual), usa el MISMO nucleo de re-secuenciacion que el
+    gemelo digital (`twin_sim.reordenar_pendientes`: EDD + Moore-Hodgson + vecino-mas-cercano, que
+    minimiza el nº de entregas tardias) en vez del greedy nearest-neighbor. Asi validacion y gemelo
+    comparten el replanificador. Sin la hora, cae al greedy previo (compat)."""
     if not pedidos_pendientes:
         return ruta
     entregados = [p for p in ruta.secuencia if p not in pedidos_pendientes]
@@ -223,7 +228,20 @@ def reordenar_intravehiculo(ruta: Ruta, pedidos: pd.DataFrame,
     sub = pedidos[pedidos["pedido_id"].isin(pedidos_pendientes)].copy()
     if sub.empty:
         return ruta
-    nueva_secuencia_pendientes = _ordenar_pedidos(sub, base_lat, base_lon)
+    if t_actual_min is not None:
+        # Nucleo COMPARTIDO con el gemelo (Moore-Hodgson): respeta el orden actual de los pendientes.
+        from core.twin_sim import reordenar_pendientes
+        orden_actual = [p for p in ruta.secuencia if p in pedidos_pendientes]
+        idx = sub.set_index("pedido_id")
+        pend = [{"pedido_id": pid,
+                 "coord": (float(idx.loc[pid, "latitud"]), float(idx.loc[pid, "longitud"])),
+                 "ventana_fin_min": hhmm_to_minutes(str(idx.loc[pid, "ventana_fin"])),
+                 "servicio_min": float(idx.loc[pid].get("tiempo_servicio_min", 8.0))}
+                for pid in orden_actual]
+        orden, _ = reordenar_pendientes(pend, float(t_actual_min), (base_lat, base_lon))
+        nueva_secuencia_pendientes = [p["pedido_id"] for p in orden]
+    else:
+        nueva_secuencia_pendientes = _ordenar_pedidos(sub, base_lat, base_lon)
     nueva_secuencia = entregados + nueva_secuencia_pendientes
 
     sub_full = pedidos[pedidos["pedido_id"].isin(nueva_secuencia)].set_index("pedido_id").loc[nueva_secuencia].reset_index()
